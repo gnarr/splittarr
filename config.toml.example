@@ -1,0 +1,5 @@
+debug=false
+
+[lidarr]
+url="https://lidarr.example.com"
+api_key="a3bb47a4968223c7568b06d4a2e9cf95"
