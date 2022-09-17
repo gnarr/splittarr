@@ -1,6 +1,6 @@
 use exitfailure::ExitFailure;
 use rusqlite::{named_params, params, Connection, Result};
-use std::borrow::{Borrow, BorrowMut};
+use std::borrow::Borrow;
 use std::fs;
 use uuid::Uuid;
 
@@ -23,6 +23,7 @@ pub struct Download {
     pub output_path: String,
     pub tracked_download_state: String,
     pub cue_files: Vec<CueFile>,
+    pub split_complete: bool,
 }
 
 impl PartialEq for Download {
@@ -40,7 +41,8 @@ impl Download {
                 title                  TEXT NOT NULL,
                 status                 TEXT NOT NULL,
                 output_path            TEXT NOT NULL,
-                tracked_download_state TEXT NOT NULL
+                tracked_download_state TEXT NOT NULL,
+                split_complete         BOOLEAN DEFAULT FALSE
             )",
             [],
         ) {
@@ -56,6 +58,7 @@ impl Download {
         status: String,
         output_path: String,
         tracked_download_state: String,
+        split_complete: bool,
     ) -> Download {
         let cue_files = CueFile::find(download_id.borrow()).await.unwrap();
         Download {
@@ -65,26 +68,49 @@ impl Download {
             output_path,
             tracked_download_state,
             cue_files,
+            split_complete,
         }
     }
 
-    pub async fn find(download_id: String) -> Result<Download, ExitFailure> {
+    // pub async fn find(download_id: String) -> Result<Download, ExitFailure> {
+    //     let conn = Download::initialize().await.unwrap();
+    //     let result = conn.query_row(
+    //         "SELECT download_id, title, status, output_path, tracked_download_state, split_complete \
+    //             FROM downloads where download_id = ?",
+    //         [download_id],
+    //         |row| {
+    //             Ok(Download::new(
+    //                 row.get_unwrap(0),
+    //                 row.get_unwrap(1),
+    //                 row.get_unwrap(2),
+    //                 row.get_unwrap(3),
+    //                 row.get_unwrap(4),
+    //                 row.get_unwrap(5)
+    //             ))
+    //         },
+    //     )?;
+    //     Ok(result.await)
+    // }
+
+    pub async fn all() -> Result<Vec<Download>, ExitFailure> {
         let conn = Download::initialize().await.unwrap();
-        let result = conn.query_row(
-            "SELECT download_id, title, status, output_path, tracked_download_state \
-                FROM downloads where download_id = ?",
-            [download_id],
-            |row| {
-                Ok(Download::new(
-                    row.get_unwrap(0),
-                    row.get_unwrap(1),
-                    row.get_unwrap(2),
-                    row.get_unwrap(3),
-                    row.get_unwrap(4),
-                ))
-            },
-        )?;
-        Ok(result.await)
+        let mut stmt = conn.prepare("SELECT download_id, title, status, output_path, tracked_download_state, split_complete \
+                FROM downloads")?;
+        let iter = stmt.query_map([], |row| {
+            Ok(Download::new(
+                row.get_unwrap(0),
+                row.get_unwrap(1),
+                row.get_unwrap(2),
+                row.get_unwrap(3),
+                row.get_unwrap(4),
+                row.get_unwrap(5),
+            ))
+        })?;
+        let mut downloads = vec![];
+        for download in iter {
+            downloads.push(download.unwrap().await);
+        }
+        Ok(downloads)
     }
 
     pub async fn save(&self) -> Result<(), ExitFailure> {
@@ -99,16 +125,17 @@ impl Download {
                     title = :title,
                     status = :status,
                     output_path = :output_path,
-                    tracked_download_state = :tracked_download_state
+                    tracked_download_state = :tracked_download_state,
+                    split_complete = :split_complete
                   where download_id = :download_id",
             )
         } else {
             conn.prepare(
                 "INSERT INTO
-                  downloads (download_id, title, status, output_path, tracked_download_state)
+                  downloads (download_id, title, status, output_path, tracked_download_state, split_complete)
                 VALUES
                   (
-                    :download_id, :title, :status, :output_path, :tracked_download_state
+                    :download_id, :title, :status, :output_path, :tracked_download_state, :split_complete
                   )",
             )
         }?;
@@ -117,7 +144,8 @@ impl Download {
             ":title": self.title,
             ":status": self.status,
             ":output_path": self.output_path,
-            ":tracked_download_state": self.tracked_download_state
+            ":tracked_download_state": self.tracked_download_state,
+            ":split_complete": self.split_complete,
         })?;
         for cue_file in self.cue_files.as_slice() {
             cue_file.save().await?;
@@ -135,6 +163,23 @@ impl Download {
         cue_file.save().await.unwrap();
         self.cue_files.push(cue_file);
         Ok(self.cue_files.last_mut().unwrap())
+    }
+
+    pub async fn delete(&mut self) {
+        let conn = CueFile::initialize().await.unwrap();
+        let _ = conn.execute(
+            "DELETE FROM tracks WHERE download_id = :download_id",
+            named_params! { ":download_id": self.download_id},
+        );
+        let _ = conn.execute(
+            "DELETE FROM cue_files WHERE download_id = :download_id",
+            named_params! { ":download_id": self.download_id},
+        );
+        self.cue_files = vec![];
+        let _ = conn.execute(
+            "DELETE FROM downloads WHERE download_id = :download_id",
+            named_params! { ":download_id": self.download_id},
+        );
     }
 }
 
@@ -229,6 +274,19 @@ impl CueFile {
         track.save().await.unwrap();
         self.tracks.push(track);
     }
+
+    pub async fn delete(&mut self) {
+        let conn = CueFile::initialize().await.unwrap();
+        let _ = conn.execute(
+            "DELETE FROM tracks WHERE cue_file_id = :cue_file_id",
+            named_params! { ":cue_file_id": self.id},
+        );
+        self.tracks = vec![];
+        let _ = conn.execute(
+            "DELETE FROM cue_files WHERE id = :id",
+            named_params! { ":id": self.id},
+        );
+    }
 }
 
 #[derive(Eq, Hash, Debug)]
@@ -308,5 +366,13 @@ impl Track {
             })?;
         }
         Ok(())
+    }
+
+    pub async fn delete(&self) {
+        let conn = Track::initialize().await.unwrap();
+        let _ = conn.execute(
+            "DELETE FROM tracks WHERE id = :id",
+            named_params! { ":id": self.id},
+        );
     }
 }
