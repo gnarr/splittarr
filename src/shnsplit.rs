@@ -1,4 +1,5 @@
 pub mod shnsplit {
+    use crate::Download;
     use itertools::Itertools;
     use rcue::parser::parse_from_file;
     use regex::Regex;
@@ -10,8 +11,9 @@ pub mod shnsplit {
     use crate::settings::settings;
     use crate::settings::settings::Shnsplit;
 
-    pub fn split(cue_entry: DirEntry) {
+    pub async fn split(download: &mut Download, cue_entry: DirEntry) {
         let cue_path = cue_entry.path().to_str().unwrap();
+        let cue_file = download.add_cue_file(cue_path.to_owned()).await.unwrap();
         dbg!(cue_path);
         let cue = parse_from_file(cue_path, true).unwrap();
         println!(
@@ -27,7 +29,7 @@ pub mod shnsplit {
 
         let settings = Settings::new();
         let shnsplit = settings.get::<Shnsplit>("shnsplit").unwrap();
-        let overwrite = if shnsplit.overwrite.to_owned() {
+        let overwrite = if *(shnsplit.overwrite.borrow()) {
             "always"
         } else {
             "never"
@@ -72,6 +74,7 @@ pub mod shnsplit {
             let input_length = &cap["input_length"];
             let output_file = &cap["output_file"];
             let output_length = &cap["output_length"];
+            cue_file.add_track(output_file.to_string()).await;
             dbg!(input_file);
             dbg!(input_length);
             dbg!(output_file);
