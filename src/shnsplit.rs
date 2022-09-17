@@ -14,7 +14,6 @@ pub mod shnsplit {
     pub async fn split(download: &mut Download, cue_entry: DirEntry) {
         let cue_path = cue_entry.path().to_str().unwrap();
         let cue_file = download.add_cue_file(cue_path.to_owned()).await.unwrap();
-        dbg!(cue_path);
         let cue = parse_from_file(cue_path, true).unwrap();
         println!(
             "Processing {} by {}",
@@ -23,7 +22,6 @@ pub mod shnsplit {
         );
 
         let cue_dir = cue_entry.path().parent().unwrap().to_str().unwrap();
-        dbg!(cue_dir);
 
         let cue_file_name = cue_entry.file_name().to_str().unwrap();
 
@@ -70,15 +68,9 @@ pub mod shnsplit {
         let re = Regex::new(r"Splitting \[(?P<input_file>[^]]+)] \((?P<input_length>[^)]+)\) --> \[(?P<output_file>[^]]+)] \((?P<output_length>[^)]+)\) :").unwrap();
 
         for cap in re.captures_iter(stderr) {
-            let input_file = &cap["input_file"];
-            let input_length = &cap["input_length"];
             let output_file = &cap["output_file"];
-            let output_length = &cap["output_length"];
             cue_file.add_track(output_file.to_string()).await;
-            dbg!(input_file);
-            dbg!(input_length);
-            dbg!(output_file);
-            dbg!(output_length);
+            println!("{}", output_file);
         }
     }
 }

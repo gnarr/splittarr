@@ -21,6 +21,7 @@ pub mod settings {
     #[allow(unused)]
     pub struct Settings {
         debug: bool,
+        check_frequency_seconds: u64,
         lidarr: Lidarr,
         shnsplit: Shnsplit,
     }
@@ -35,6 +36,8 @@ pub mod settings {
                 .add_source(File::with_name(config_file.to_str().unwrap()))
                 .add_source(Environment::with_prefix("splittarr"))
                 .set_default("shnsplit.path", "shnsplit")
+                .unwrap()
+                .set_default("check_frequency_seconds", 60)
                 .unwrap()
                 .build()
                 .unwrap();
