@@ -24,15 +24,22 @@ async fn main() -> Result<(), ExitFailure> {
     println!("Checking every {} seconds", check_frequency_seconds);
     loop {
         println!(
-            "Checking Lidarr's queue at {}",
+            "Checking Lidarr's download queue at {}",
             Local::now().format("%Y-%m-%d %H:%M:%S %z")
         );
 
         // get all downloads in database
         let downloads = Download::all().await?;
 
+        println!("{} downloads registered in Splittarr", downloads.len());
+
         // get queue from lidarr
         let queue = Queue::get().await?;
+
+        println!(
+            "Found {} records in Lidarr's download queue",
+            queue.records.len()
+        );
 
         // partition downloads by whether they are found in lidarr's queue or not
         let (in_queue, to_delete): (Vec<Download>, Vec<Download>) =
@@ -44,15 +51,10 @@ async fn main() -> Result<(), ExitFailure> {
                     .is_some()
             });
 
-        // dbg!(&in_queue);
-        // dbg!(&to_delete);
-
         // partition downloads found in queue by whether they where completely split or not
         let (processed, mut process_queue): (Vec<Download>, Vec<Download>) = in_queue
             .into_iter()
             .partition(|download| download.split_complete);
-
-        // dbg!(&process_queue);
 
         // partition records by whether they are in process_queue or not
         let (_, un_processed_records): (Vec<_>, Vec<_>) =
@@ -62,8 +64,6 @@ async fn main() -> Result<(), ExitFailure> {
                     .find(|&download| download.download_id == record.download_id)
                     .is_some()
             });
-
-        // dbg!(&un_processed_records);
 
         for record in un_processed_records {
             let in_process_queue = process_queue
@@ -88,7 +88,7 @@ async fn main() -> Result<(), ExitFailure> {
             }
         }
 
-        // dbg!(&process_queue);
+        println!("{} downloads to be processed", process_queue.len());
 
         for mut download in process_queue {
             for file in WalkDir::new(download.output_path.as_str())

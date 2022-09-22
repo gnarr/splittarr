@@ -347,13 +347,10 @@ impl Track {
                     :id, :path, :cue_file_id, :download_id
                   )",
             )?;
-            dbg!(self.path.to_owned());
-            dbg!(self.cue_file_id.to_owned());
-            dbg!(self.download_id.to_owned());
             statement.execute(named_params! {
                 ":id": self.id,
                 ":path": self.path,
-                ":cue_file_id": self.cue_file_id ,
+                ":cue_file_id": self.cue_file_id,
                 ":download_id": self.download_id,
             })?;
         }
