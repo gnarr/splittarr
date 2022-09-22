@@ -32,15 +32,17 @@ pub mod settings {
             let dirs = dirs();
             let config_dir = dirs.config_dir();
             let config_file = config_dir.join("config.toml");
+
             let config = Config::builder()
-                .add_source(File::with_name(config_file.to_str().unwrap()))
+                .add_source(File::from(config_file).required(false))
                 .add_source(Environment::with_prefix("splittarr"))
                 .set_default("shnsplit.path", "shnsplit")
                 .unwrap()
                 .set_default("check_frequency_seconds", 60)
                 .unwrap()
                 .build()
-                .unwrap();
+                .expect("ERROR");
+
             config
         }
     }
