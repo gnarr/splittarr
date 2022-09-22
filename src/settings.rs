@@ -21,6 +21,7 @@ pub mod settings {
     #[allow(unused)]
     pub struct Settings {
         debug: bool,
+        data_dir: String,
         check_frequency_seconds: u64,
         lidarr: Lidarr,
         shnsplit: Shnsplit,
@@ -36,6 +37,8 @@ pub mod settings {
             let config = Config::builder()
                 .add_source(File::from(config_file).required(false))
                 .add_source(Environment::with_prefix("splittarr"))
+                .set_default("data_dir", dirs.data_dir().to_str())
+                .unwrap()
                 .set_default("shnsplit.path", "shnsplit")
                 .unwrap()
                 .set_default("check_frequency_seconds", 60)

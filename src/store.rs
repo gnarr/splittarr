@@ -2,16 +2,63 @@ use exitfailure::ExitFailure;
 use rusqlite::{named_params, params, Connection, Result};
 use std::borrow::Borrow;
 use std::fs;
+use std::path::Path;
 use uuid::Uuid;
 
-use crate::globals::dirs;
+use crate::Settings;
 
 async fn establish_connection() -> Result<Connection, ExitFailure> {
-    let dirs = dirs();
-    let data_dir = dirs.data_dir();
-    fs::create_dir_all(data_dir)?;
-    let database_file = data_dir.join("data.db");
+    let settings = Settings::new();
+    let data_dir = settings
+        .get::<String>("data_dir")
+        .expect("Could not find data_dir");
+    let data_dir_path = Path::new(data_dir.as_str());
+    fs::create_dir_all(data_dir_path)?;
+    let database_file = data_dir_path.join("data.db");
+    let initialized = database_file.exists();
     let conn = Connection::open(database_file.to_str().unwrap())?;
+    if !initialized {
+        match conn.execute(
+            "CREATE TABLE IF NOT EXISTS downloads (
+                download_id            TEXT PRIMARY KEY,
+                title                  TEXT NOT NULL,
+                status                 TEXT NOT NULL,
+                output_path            TEXT NOT NULL,
+                tracked_download_state TEXT NOT NULL,
+                split_complete         BOOLEAN DEFAULT FALSE
+            )",
+            [],
+        ) {
+            Ok(..) => (),
+            Err(err) => println!("Failure: {}", err),
+        }
+        match conn.execute(
+            "CREATE TABLE IF NOT EXISTS cue_files (
+                id                     TEXT PRIMARY KEY,
+                path                   TEXT NOT NULL,
+                download_id            TEXT NOT NULL,
+                FOREIGN KEY(download_id) REFERENCES downloads(download_id)
+            )",
+            [],
+        ) {
+            Ok(..) => (),
+            Err(err) => println!("Failure: {}", err),
+        }
+        match conn.execute(
+            "CREATE TABLE IF NOT EXISTS tracks (
+                id                     TEXT PRIMARY KEY,
+                path                   TEXT NOT NULL,
+                cue_file_id            TEXT NOT NULL,
+                download_id            TEXT NOT NULL,
+                FOREIGN KEY(cue_file_id) REFERENCES cue_files(id),
+                FOREIGN KEY(download_id) REFERENCES downloads(download_id)
+            )",
+            [],
+        ) {
+            Ok(..) => (),
+            Err(err) => println!("Failure: {}", err),
+        }
+    }
     Ok(conn)
 }
 
@@ -33,25 +80,6 @@ impl PartialEq for Download {
 }
 
 impl Download {
-    async fn initialize() -> Result<Connection, ExitFailure> {
-        let conn = establish_connection().await?;
-        match conn.execute(
-            "CREATE TABLE IF NOT EXISTS downloads (
-                download_id            TEXT PRIMARY KEY,
-                title                  TEXT NOT NULL,
-                status                 TEXT NOT NULL,
-                output_path            TEXT NOT NULL,
-                tracked_download_state TEXT NOT NULL,
-                split_complete         BOOLEAN DEFAULT FALSE
-            )",
-            [],
-        ) {
-            Ok(..) => (),
-            Err(err) => println!("Failure: {}", err),
-        }
-        Ok(conn)
-    }
-
     async fn new(
         download_id: String,
         title: String,
@@ -73,7 +101,7 @@ impl Download {
     }
 
     // pub async fn find(download_id: String) -> Result<Download, ExitFailure> {
-    //     let conn = Download::initialize().await.unwrap();
+    //     let conn = establish_connection().await?;
     //     let result = conn.query_row(
     //         "SELECT download_id, title, status, output_path, tracked_download_state, split_complete \
     //             FROM downloads where download_id = ?",
@@ -93,7 +121,7 @@ impl Download {
     // }
 
     pub async fn all() -> Result<Vec<Download>, ExitFailure> {
-        let conn = Download::initialize().await.unwrap();
+        let conn = establish_connection().await?;
         let mut stmt = conn.prepare("SELECT download_id, title, status, output_path, tracked_download_state, split_complete \
                 FROM downloads")?;
         let iter = stmt.query_map([], |row| {
@@ -114,7 +142,7 @@ impl Download {
     }
 
     pub async fn save(&self) -> Result<(), ExitFailure> {
-        let conn = Download::initialize().await.unwrap();
+        let conn = establish_connection().await?;
         let mut select_statement =
             conn.prepare("SELECT download_id FROM downloads where download_id = ?")?;
         let exists = select_statement.exists(params![self.download_id]).unwrap();
@@ -166,7 +194,7 @@ impl Download {
     }
 
     pub async fn delete(&mut self) {
-        let conn = CueFile::initialize().await.unwrap();
+        let conn = establish_connection().await.unwrap();
         let _ = conn.execute(
             "DELETE FROM tracks WHERE download_id = :download_id",
             named_params! { ":download_id": self.download_id},
@@ -198,23 +226,6 @@ impl PartialEq for CueFile {
 }
 
 impl CueFile {
-    async fn initialize() -> Result<Connection, ExitFailure> {
-        let conn = establish_connection().await?;
-        match conn.execute(
-            "CREATE TABLE IF NOT EXISTS cue_files (
-                id                     TEXT PRIMARY KEY,
-                path                   TEXT NOT NULL,
-                download_id            TEXT NOT NULL,
-                FOREIGN KEY(download_id) REFERENCES downloads(download_id)
-            )",
-            [],
-        ) {
-            Ok(..) => (),
-            Err(err) => println!("Failure: {}", err),
-        }
-        Ok(conn)
-    }
-
     async fn new(id: Uuid, download_id: String, path: String) -> CueFile {
         let tracks = Track::find(id).await.unwrap();
         CueFile {
@@ -226,7 +237,7 @@ impl CueFile {
     }
 
     async fn find(download_id: &str) -> Result<Vec<CueFile>, ExitFailure> {
-        let conn = CueFile::initialize().await.unwrap();
+        let conn = establish_connection().await?;
         let mut stmt = conn.prepare("SELECT id, path FROM cue_files where download_id = ?")?;
         let iter = stmt.query_map([download_id], |row| {
             Ok(CueFile::new(
@@ -243,7 +254,7 @@ impl CueFile {
     }
 
     async fn save(&self) -> Result<(), ExitFailure> {
-        let conn = CueFile::initialize().await.unwrap();
+        let conn = establish_connection().await?;
         let mut select_statement = conn.prepare("SELECT path FROM cue_files where path = ?")?;
         let exists = select_statement.exists(params![self.path]).unwrap();
         if !exists {
@@ -276,7 +287,7 @@ impl CueFile {
     }
 
     pub async fn delete(&mut self) {
-        let conn = CueFile::initialize().await.unwrap();
+        let conn = establish_connection().await.unwrap();
         let _ = conn.execute(
             "DELETE FROM tracks WHERE cue_file_id = :cue_file_id",
             named_params! { ":cue_file_id": self.id},
@@ -304,27 +315,8 @@ impl PartialEq for Track {
 }
 
 impl Track {
-    async fn initialize() -> Result<Connection, ExitFailure> {
-        let conn = establish_connection().await?;
-        match conn.execute(
-            "CREATE TABLE IF NOT EXISTS tracks (
-                id                     TEXT PRIMARY KEY,
-                path                   TEXT NOT NULL,
-                cue_file_id            TEXT NOT NULL,
-                download_id            TEXT NOT NULL,
-                FOREIGN KEY(cue_file_id) REFERENCES cue_files(id),
-                FOREIGN KEY(download_id) REFERENCES downloads(download_id)
-            )",
-            [],
-        ) {
-            Ok(..) => (),
-            Err(err) => println!("Failure: {}", err),
-        }
-        Ok(conn)
-    }
-
     async fn find(cue_file_id: Uuid) -> Result<Vec<Track>, ExitFailure> {
-        let conn = Track::initialize().await.unwrap();
+        let conn = establish_connection().await?;
         let mut stmt =
             conn.prepare("SELECT id, download_id, path FROM tracks where cue_file_id = ?")?;
         let iter = stmt.query_map([cue_file_id], |row| {
@@ -343,7 +335,7 @@ impl Track {
     }
 
     async fn save(&self) -> Result<(), ExitFailure> {
-        let conn = Track::initialize().await.unwrap();
+        let conn = establish_connection().await?;
         let mut select_statement = conn.prepare("SELECT path FROM tracks where path = ?")?;
         let exists = select_statement.exists(params![self.path]).unwrap();
         if !exists {
@@ -369,7 +361,7 @@ impl Track {
     }
 
     pub async fn delete(&self) {
-        let conn = Track::initialize().await.unwrap();
+        let conn = establish_connection().await.unwrap();
         let _ = conn.execute(
             "DELETE FROM tracks WHERE id = :id",
             named_params! { ":id": self.id},
