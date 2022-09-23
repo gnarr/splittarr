@@ -5,8 +5,8 @@ mod lidarr;
 mod shnsplit;
 mod store;
 
-use crate::settings::settings::{Lidarr, Settings};
-use crate::shnsplit::shnsplit::split;
+use crate::settings::get_settings;
+use crate::shnsplit::split;
 use crate::store::Download;
 use chrono::prelude::*;
 use exitfailure::ExitFailure;
@@ -19,7 +19,7 @@ use walkdir::WalkDir;
 #[tokio::main]
 async fn main() -> Result<(), ExitFailure> {
     println!("Splittarr");
-    let settings = Settings::new();
+    let settings = get_settings();
     let check_frequency_seconds = settings.get::<u64>("check_frequency_seconds").unwrap();
     println!("Checking every {} seconds", check_frequency_seconds);
     loop {
@@ -47,8 +47,7 @@ async fn main() -> Result<(), ExitFailure> {
                 queue
                     .records
                     .iter()
-                    .find(|&record| record.download_id == download.download_id)
-                    .is_some()
+                    .any(|record| record.download_id == download.download_id)
             });
 
         // partition downloads found in queue by whether they where completely split or not
@@ -61,15 +60,13 @@ async fn main() -> Result<(), ExitFailure> {
             queue.records.into_iter().partition(|record| {
                 processed
                     .iter()
-                    .find(|&download| download.download_id == record.download_id)
-                    .is_some()
+                    .any(|download| download.download_id == record.download_id)
             });
 
         for record in un_processed_records {
             let in_process_queue = process_queue
                 .iter()
-                .find(|&download| download.download_id == record.download_id)
-                .is_some();
+                .any(|download| download.download_id == record.download_id);
             if !in_process_queue
                 && record.status == "completed"
                 && record.tracked_download_state == "importFailed"
@@ -95,10 +92,10 @@ async fn main() -> Result<(), ExitFailure> {
                 .into_iter()
                 .filter_map(|file| file.ok())
             {
-                if file.metadata().unwrap().is_file() {
-                    if file.file_name().to_str().unwrap().ends_with("cue") {
-                        split(download.borrow_mut(), file).await;
-                    }
+                if file.metadata().unwrap().is_file()
+                    && file.file_name().to_str().unwrap().ends_with("cue")
+                {
+                    split(download.borrow_mut(), file).await;
                 }
             }
             download.split_complete = true;
