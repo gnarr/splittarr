@@ -10,10 +10,10 @@ on:
 
 jobs:
 
-  test_phaser:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Update local toolchain
         run: |
@@ -29,17 +29,14 @@ jobs:
 
       - name: Lint
         run: |
-          cd phaser
           cargo fmt -- --check
           cargo clippy -- -D warnings          
 
       - name: Test
         run: |
-          cd phaser
           cargo check
           cargo test --all          
 
       - name: Build
         run: |
-          cd phaser
           cargo build --release
