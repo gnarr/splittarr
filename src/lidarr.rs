@@ -1,10 +1,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::settings::settings;
-use crate::Lidarr;
+use crate::settings::{get_settings, Lidarr};
 use exitfailure::ExitFailure;
-use settings::Settings;
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,21 +40,21 @@ pub struct Record {
     pub estimated_completion_time: Option<String>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Quality {
     pub quality: Quality2,
     pub revision: Revision,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Quality2 {
     pub id: i64,
     pub name: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Revision {
     pub version: i64,
@@ -64,7 +62,7 @@ pub struct Revision {
     pub is_repack: bool,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusMessage {
     pub title: String,
@@ -73,7 +71,7 @@ pub struct StatusMessage {
 
 impl Queue {
     pub async fn get() -> Result<Self, ExitFailure> {
-        let settings = Settings::new();
+        let settings = get_settings();
         let client = reqwest::Client::new();
         let lidarr = settings.get::<Lidarr>("lidarr").expect(
             "Lidarr settings not found in config or environment. \

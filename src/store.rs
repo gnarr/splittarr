@@ -1,3 +1,4 @@
+use crate::settings::get_settings;
 use exitfailure::ExitFailure;
 use rusqlite::{named_params, params, Connection, Result};
 use std::borrow::Borrow;
@@ -5,10 +6,8 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
-use crate::Settings;
-
 async fn establish_connection() -> Result<Connection, ExitFailure> {
-    let settings = Settings::new();
+    let settings = get_settings();
     let data_dir = settings
         .get::<String>("data_dir")
         .expect("Could not find data_dir");
@@ -62,7 +61,7 @@ async fn establish_connection() -> Result<Connection, ExitFailure> {
     Ok(conn)
 }
 
-#[derive(Eq, Hash, Debug)]
+#[derive(Eq)]
 pub struct Download {
     pub download_id: String,
     pub title: String,
@@ -211,7 +210,7 @@ impl Download {
     }
 }
 
-#[derive(Eq, Hash, Debug)]
+#[derive(Eq)]
 pub struct CueFile {
     id: Uuid,
     download_id: String,
@@ -300,7 +299,7 @@ impl CueFile {
     }
 }
 
-#[derive(Eq, Hash, Debug)]
+#[derive(Eq)]
 pub struct Track {
     id: Uuid,
     cue_file_id: Uuid,
