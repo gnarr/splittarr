@@ -109,8 +109,7 @@ async fn main() -> Result<(), ExitFailure> {
             println!("Cleaning up {}", download.title);
             for cue_file in download.cue_files.iter_mut() {
                 for track in cue_file.tracks.iter_mut() {
-                    dbg!(track.path.as_str());
-                    fs::remove_file(track.path.as_str()).unwrap();
+                    let _ = fs::remove_file(track.path.as_str());
                     track.delete().await;
                 }
                 cue_file.delete().await;
