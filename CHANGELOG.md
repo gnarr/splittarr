@@ -1,3 +1,14 @@
+## [0.1.2](https://github.com/gnarr/splittarr/compare/v0.1.1...v0.1.2) (2022-09-24)
+
+
+### Bug Fixes
+
+* **main:** notify when done processing a download ([564a0a8](https://github.com/gnarr/splittarr/commit/564a0a8a6ef28dda6c5d8b4d1619475be594ef4c))
+* **settings:** remove debug setting ([26fb830](https://github.com/gnarr/splittarr/commit/26fb830db4c125bdd48277e7cb2f4681f40ba4a0))
+* **settings:** set default value of true for shnsplit.overwrite ([f64cc26](https://github.com/gnarr/splittarr/commit/f64cc26b6084c385679c38b3b9cc49032f95d362))
+
+
+
 ## [0.1.1](https://github.com/gnarr/splittarr/compare/v0.1.0...v0.1.1) (2022-09-24)
 
 
