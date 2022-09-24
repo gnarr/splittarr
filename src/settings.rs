@@ -19,7 +19,6 @@ pub struct Shnsplit {
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
 pub struct Settings {
-    debug: bool,
     data_dir: String,
     check_frequency_seconds: u64,
     lidarr: Lidarr,
@@ -36,15 +35,13 @@ pub fn get_settings() -> Config {
         .add_source(File::with_name("config.toml").required(false))
         .add_source(File::with_name("/config/config.toml").required(false))
         .add_source(File::from(config_file).required(false))
-        .set_default("debug", false)
-        .unwrap()
         .set_default("data_dir", dirs.data_dir().to_str())
+        .unwrap()
+        .set_default("check_frequency_seconds", 60)
         .unwrap()
         .set_default("shnsplit.path", "shnsplit")
         .unwrap()
         .set_default("shnsplit.overwrite", true)
-        .unwrap()
-        .set_default("check_frequency_seconds", 60)
         .unwrap()
         .build()
         .expect("ERROR");
