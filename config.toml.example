@@ -1,4 +1,4 @@
-debug=false
+check_frequency_seconds=60
 
 [lidarr]
 url="https://lidarr.example.com"
