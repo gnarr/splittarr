@@ -98,6 +98,7 @@ async fn main() -> Result<(), ExitFailure> {
                     split(download.borrow_mut(), file).await;
                 }
             }
+            println!("Done processing {}", download.title);
             download.split_complete = true;
             download.save().await.expect("TODO: panic message");
         }

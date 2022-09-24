@@ -26,7 +26,7 @@ jobs:
         run: |
           cargo build --release
 
-      - name: conventional Changelog Action
+      - name: Conventional Changelog Action
         id: changelog
         uses: TriPSs/conventional-changelog-action@v3.7.1
         with:
@@ -35,7 +35,8 @@ jobs:
       - name: Rename
         run: cp target/release/splittarr splittarr-${{ steps.changelog.outputs.tag }}-x86_64-pc-linux-gnu
 
-      - name: create release
+      - name: Create Release
+        id: create_release
         uses: actions/create-release@v1
         if: ${{ steps.changelog.outputs.skipped == 'false' }}
         env:
@@ -44,4 +45,14 @@ jobs:
           tag_name: ${{ steps.changelog.outputs.tag }}
           release_name: ${{ steps.changelog.outputs.tag }}
           body: ${{ steps.changelog.outputs.clean_changelog }}
-          files: splittarr-${{ steps.changelog.outputs.tag }}-x86_64-pc-linux-gnu
+
+      - name: Upload Release Asset
+        id: upload-release-asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: splittarr-${{ steps.changelog.outputs.tag }}-x86_64-pc-linux-gnu
+          asset_name: splittarr-${{ steps.changelog.outputs.tag }}-x86_64-pc-linux-gnu
+          asset_content_type: application/octet-stream
