@@ -1,20 +1,39 @@
-name: Release
+name: Releases
 on:
   push:
     branches:
       - main
 
 jobs:
-  changelog:
+  release:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v2
+      - run: rustup component add clippy
+
+      - name: Lint
+        run: |
+          cargo fmt -- --check
+          cargo clippy -- -D warnings
+
+      - name: Test
+        run: |
+          cargo check
+          cargo test --all
+
+      - name: Build
+        run: |
+          cargo build --release
+
       - name: conventional Changelog Action
         id: changelog
         uses: TriPSs/conventional-changelog-action@v3.7.1
         with:
           github-token: ${{ secrets.github_token }}
+
+      - name: Rename
+        run: cp target/release/splittarr splittarr-${{ steps.changelog.outputs.tag }}-x86_64-pc-linux-gnu
 
       - name: create release
         uses: actions/create-release@v1
@@ -25,3 +44,4 @@ jobs:
           tag_name: ${{ steps.changelog.outputs.tag }}
           release_name: ${{ steps.changelog.outputs.tag }}
           body: ${{ steps.changelog.outputs.clean_changelog }}
+          files: splittarr-${{ steps.changelog.outputs.tag }}-x86_64-pc-linux-gnu
