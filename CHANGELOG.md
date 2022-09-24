@@ -1,4 +1,13 @@
-# 0.1.0 (2022-09-24)
+## [0.1.1](https://github.com/gnarr/splittarr/compare/v0.1.0...v0.1.1) (2022-09-24)
+
+
+### Bug Fixes
+
+* **settings:** allow loading of config from multiple locations ([5bc295d](https://github.com/gnarr/splittarr/commit/5bc295dbe6f84c53551b7c496d1106f53a21a0d9))
+
+
+
+# [0.1.0](https://github.com/gnarr/splittarr/compare/d67e73e05c7eefb67c16a573361666e945ee6679...v0.1.0) (2022-09-24)
 
 
 ### Bug Fixes
