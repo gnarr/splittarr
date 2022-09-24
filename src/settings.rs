@@ -42,6 +42,8 @@ pub fn get_settings() -> Config {
         .unwrap()
         .set_default("shnsplit.path", "shnsplit")
         .unwrap()
+        .set_default("shnsplit.overwrite", true)
+        .unwrap()
         .set_default("check_frequency_seconds", 60)
         .unwrap()
         .build()
