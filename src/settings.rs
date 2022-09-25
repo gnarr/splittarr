@@ -1,6 +1,12 @@
 use crate::globals::dirs;
-use config::{Config, Environment, File};
+use config::{Config, ConfigError, Environment, File};
 use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+#[allow(unused)]
+pub struct Cue {
+    pub strict: bool,
+}
 
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
@@ -20,34 +26,38 @@ pub struct Shnsplit {
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
 pub struct Settings {
-    data_dir: String,
-    check_frequency_seconds: u64,
-    lidarr: Lidarr,
-    shnsplit: Shnsplit,
+    pub data_dir: String,
+    pub check_frequency_seconds: u64,
+    pub cue: Cue,
+    pub lidarr: Lidarr,
+    pub shnsplit: Shnsplit,
 }
 
-pub fn get_settings() -> Config {
-    let dirs = dirs();
-    let config_dir = dirs.config_dir();
-    let config_file = config_dir.join("config.toml");
+impl Settings {
+    pub fn new() -> Result<Self, ConfigError> {
+        let dirs = dirs();
+        let config_dir = dirs.config_dir();
+        let config_file = config_dir.join("config.toml");
 
-    let config = Config::builder()
-        .add_source(Environment::with_prefix("splittarr"))
-        .add_source(File::with_name("config.toml").required(false))
-        .add_source(File::with_name("/config/config.toml").required(false))
-        .add_source(File::from(config_file).required(false))
-        .set_default("data_dir", dirs.data_dir().to_str())
-        .unwrap()
-        .set_default("check_frequency_seconds", 60)
-        .unwrap()
-        .set_default("shnsplit.path", "shnsplit")
-        .unwrap()
-        .set_default("shnsplit.overwrite", true)
-        .unwrap()
-        .set_default("shnsplit.format", "%p - %a - %n - %t")
-        .unwrap()
-        .build()
-        .expect("ERROR");
+        let config = Config::builder()
+            .add_source(Environment::with_prefix("splittarr"))
+            .add_source(File::with_name("config.toml").required(false))
+            .add_source(File::with_name("/config/config.toml").required(false))
+            .add_source(File::from(config_file).required(false))
+            .set_default("data_dir", dirs.data_dir().to_str())
+            .unwrap()
+            .set_default("check_frequency_seconds", "60")
+            .unwrap()
+            .set_default("cue.strict", false)
+            .unwrap()
+            .set_default("shnsplit.path", "shnsplit")
+            .unwrap()
+            .set_default("shnsplit.overwrite", true)
+            .unwrap()
+            .set_default("shnsplit.format", "%p - %a - %n - %t")
+            .unwrap()
+            .build()?;
 
-    config
+        config.try_deserialize::<Settings>()
+    }
 }

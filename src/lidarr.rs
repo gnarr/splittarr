@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::settings::{get_settings, Lidarr};
+use crate::settings::Settings;
 use exitfailure::ExitFailure;
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -71,18 +71,11 @@ pub struct StatusMessage {
 
 impl Queue {
     pub async fn get() -> Result<Self, ExitFailure> {
-        let settings = get_settings();
+        let settings = Settings::new()?;
         let client = reqwest::Client::new();
-        let lidarr = settings.get::<Lidarr>("lidarr").expect(
-            "Lidarr settings not found in config or environment. \
-            Please create a config.toml file with [lidarr] url and api_key or set environment \
-            variables SPLITTARR_LIDARR.URL and SPLITTARR_LIDARR.API_KEY.\nERROR",
-        );
-        let mut lidarr_queue = lidarr.url.to_owned();
-        lidarr_queue.push_str("/api/v1/queue");
         let response = client
-            .get(lidarr_queue)
-            .header("x-api-key", lidarr.api_key)
+            .get(format!("{}/api/v1/queue", settings.lidarr.url))
+            .header("x-api-key", settings.lidarr.api_key)
             .send()
             .await?
             .text()

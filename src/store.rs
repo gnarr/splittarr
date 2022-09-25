@@ -1,4 +1,4 @@
-use crate::settings::get_settings;
+use crate::settings::Settings;
 use exitfailure::ExitFailure;
 use rusqlite::{named_params, params, Connection, Result};
 use std::borrow::Borrow;
@@ -7,11 +7,8 @@ use std::path::Path;
 use uuid::Uuid;
 
 async fn establish_connection() -> Result<Connection, ExitFailure> {
-    let settings = get_settings();
-    let data_dir = settings
-        .get::<String>("data_dir")
-        .expect("Could not find data_dir");
-    let data_dir_path = Path::new(data_dir.as_str());
+    let settings = Settings::new()?;
+    let data_dir_path = Path::new(settings.data_dir.as_str());
     fs::create_dir_all(data_dir_path)?;
     let database_file = data_dir_path.join("data.db");
     let initialized = database_file.exists();
