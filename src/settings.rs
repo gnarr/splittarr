@@ -14,6 +14,7 @@ pub struct Lidarr {
 pub struct Shnsplit {
     pub path: String,
     pub overwrite: bool,
+    pub format: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,6 +43,8 @@ pub fn get_settings() -> Config {
         .set_default("shnsplit.path", "shnsplit")
         .unwrap()
         .set_default("shnsplit.overwrite", true)
+        .unwrap()
+        .set_default("shnsplit.format", "%p - %a - %n - %t")
         .unwrap()
         .build()
         .expect("ERROR");
