@@ -1,3 +1,12 @@
+# [0.2.0](https://github.com/gnarr/splittarr/compare/v0.1.2...v0.2.0) (2022-09-25)
+
+
+### Features
+
+* **settings:** configurable format for shnsplit output ([#5](https://github.com/gnarr/splittarr/issues/5)) ([446c9e6](https://github.com/gnarr/splittarr/commit/446c9e6461168c2efb7efe8932504a3a01da658c))
+
+
+
 ## [0.1.2](https://github.com/gnarr/splittarr/compare/v0.1.1...v0.1.2) (2022-09-24)
 
 
