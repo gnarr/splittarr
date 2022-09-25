@@ -10,14 +10,15 @@ ENV OPENSSL_STATIC=yes
 ENV OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu/
 ENV OPENSSL_INCLUDE_DIR=/usr/include/openssl/
 
-RUN git clone -n https://github.com/gnarr/splittarr.git /splittarr && cd /splittarr && \
-    git fetch --all --tags && \
-    git checkout v${VERSION} -b hotio && \
+RUN git clone --branch v${VERSION} --single-branch https://github.com/gnarr/splittarr.git /splittarr && \
+    cd /splittarr && \
     CARGO_INSTALL_ROOT=/splittarr cargo install --locked --path .
 
 FROM ${UPSTREAM_IMAGE}@${UPSTREAM_DIGEST_AMD64}
 
 VOLUME ["${CONFIG_DIR}"]
+
+ENV SPLITTARR_DATA_DIR=/config
 
 COPY --from=builder /splittarr/bin/splittarr ${APP_DIR}/splittarr
 COPY --from=builder /splittarr/config.toml.example ${APP_DIR}/config.toml
