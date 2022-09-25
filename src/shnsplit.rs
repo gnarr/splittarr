@@ -1,16 +1,16 @@
-use crate::settings::{get_settings, Shnsplit};
+use crate::settings::Settings;
 use crate::Download;
 use itertools::Itertools;
 use rcue::parser::parse_from_file;
 use regex::Regex;
-use std::borrow::Borrow;
 use std::process::Command;
 use walkdir::DirEntry;
 
 pub async fn split(download: &mut Download, cue_entry: DirEntry) {
+    let settings = Settings::new().unwrap();
     let cue_path = cue_entry.path().to_str().unwrap();
     let cue_file = download.add_cue_file(cue_path.to_owned()).await.unwrap();
-    let cue = parse_from_file(cue_path, true).unwrap();
+    let cue = parse_from_file(cue_path, settings.cue.strict).unwrap();
     println!(
         "Processing {} by {}",
         cue.title.unwrap(),
@@ -21,14 +21,11 @@ pub async fn split(download: &mut Download, cue_entry: DirEntry) {
 
     let cue_file_name = cue_entry.file_name().to_str().unwrap();
 
-    let settings = get_settings();
-    let shnsplit = settings.get::<Shnsplit>("shnsplit").unwrap();
-    let overwrite = if *(shnsplit.overwrite.borrow()) {
+    let overwrite = if settings.shnsplit.overwrite {
         "always"
     } else {
         "never"
     };
-    let format = shnsplit.format;
 
     let mut args = vec![
         "-f",
@@ -36,7 +33,7 @@ pub async fn split(download: &mut Download, cue_entry: DirEntry) {
         "-d",
         cue_dir,
         "-t",
-        &format,
+        &settings.shnsplit.format,
         "-O",
         overwrite,
         "-o",
@@ -52,8 +49,7 @@ pub async fn split(download: &mut Download, cue_entry: DirEntry) {
         args.push(file);
     }
 
-    let shnsplit_path = shnsplit.path.to_owned();
-    let shnsplit_output = Command::new(shnsplit_path)
+    let shnsplit_output = Command::new(settings.shnsplit.path)
         .current_dir(cue_dir)
         .args(args)
         .output()

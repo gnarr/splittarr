@@ -5,7 +5,7 @@ mod lidarr;
 mod shnsplit;
 mod store;
 
-use crate::settings::get_settings;
+use crate::settings::Settings;
 use crate::shnsplit::split;
 use crate::store::Download;
 use chrono::prelude::*;
@@ -19,9 +19,11 @@ use walkdir::WalkDir;
 #[tokio::main]
 async fn main() -> Result<(), ExitFailure> {
     println!("Splittarr");
-    let settings = get_settings();
-    let check_frequency_seconds = settings.get::<u64>("check_frequency_seconds").unwrap();
-    println!("Checking every {} seconds", check_frequency_seconds);
+    let settings = Settings::new()?;
+    println!(
+        "Checking every {} seconds",
+        settings.check_frequency_seconds
+    );
     loop {
         println!(
             "Checking Lidarr's download queue at {}",
@@ -115,6 +117,6 @@ async fn main() -> Result<(), ExitFailure> {
             download.delete().await;
         }
 
-        sleep(time::Duration::from_secs(check_frequency_seconds));
+        sleep(time::Duration::from_secs(settings.check_frequency_seconds));
     }
 }
