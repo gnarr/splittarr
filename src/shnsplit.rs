@@ -28,6 +28,7 @@ pub async fn split(download: &mut Download, cue_entry: DirEntry) {
     } else {
         "never"
     };
+    let format = shnsplit.format;
 
     let mut args = vec![
         "-f",
@@ -35,7 +36,7 @@ pub async fn split(download: &mut Download, cue_entry: DirEntry) {
         "-d",
         cue_dir,
         "-t",
-        "%n - %t",
+        &format,
         "-O",
         overwrite,
         "-o",
