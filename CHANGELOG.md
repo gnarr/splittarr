@@ -1,3 +1,12 @@
+## [0.2.1](https://github.com/gnarr/splittarr/compare/v0.2.0...v0.2.1) (2022-09-25)
+
+
+### Bug Fixes
+
+* **lidarr:** indexer is optional ([60a470a](https://github.com/gnarr/splittarr/commit/60a470aab95eb4b3d632834c4445895b1380edaf))
+
+
+
 # [0.2.0](https://github.com/gnarr/splittarr/compare/v0.1.2...v0.2.0) (2022-09-25)
 
 
