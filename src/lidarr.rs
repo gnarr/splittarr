@@ -32,7 +32,7 @@ pub struct Record {
     pub download_id: String,
     pub protocol: String,
     pub download_client: String,
-    pub indexer: String,
+    pub indexer: Option<String>,
     pub output_path: String,
     pub download_forced: bool,
     pub id: i64,
