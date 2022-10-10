@@ -19,7 +19,7 @@ pub struct Queue {
 #[serde(rename_all = "camelCase")]
 pub struct Record {
     pub artist_id: i64,
-    pub album_id: i64,
+    pub album_id: Option<i64>,
     pub quality: Quality,
     pub size: f64,
     pub title: String,
