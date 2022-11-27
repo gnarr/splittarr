@@ -13,8 +13,9 @@ pub async fn split(download: &mut Download, cue_entry: DirEntry) {
     let cue = parse_from_file(cue_path, settings.cue.strict).unwrap();
     println!(
         "Processing {} by {}",
-        cue.title.unwrap(),
-        cue.performer.unwrap()
+        cue.title.unwrap_or_else(|| String::from("Unknown Title")),
+        cue.performer
+            .unwrap_or_else(|| String::from("Unknown Performer"))
     );
 
     let cue_dir = cue_entry.path().parent().unwrap().to_str().unwrap();
