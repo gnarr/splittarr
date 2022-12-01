@@ -31,6 +31,8 @@ jobs:
         uses: TriPSs/conventional-changelog-action@v3.7.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          version-file: 'Cargo.toml'
+          version-path: "package.version"
 
       - name: Rename
         run: cp target/release/splittarr splittarr-${{ steps.changelog.outputs.tag }}-x86_64-pc-linux-gnu
