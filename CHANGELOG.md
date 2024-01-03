@@ -1,3 +1,13 @@
+## [0.2.5](https://github.com/gnarr/splittarr/compare/v0.2.4...v0.2.5) (2024-01-03)
+
+
+### Bug Fixes
+
+* **lidarr:** support v4 api ([9843fdd](https://github.com/gnarr/splittarr/commit/9843fdd8392e1869ffe5849c4f5f3a605779a874))
+* check audio file existence before listing as source for shnsplit ([426455a](https://github.com/gnarr/splittarr/commit/426455a694a61628fbdb938713535a0014141258))
+
+
+
 ## [0.2.4](https://github.com/gnarr/splittarr/compare/v0.2.3...v0.2.4) (2022-12-01)
 
 
@@ -31,15 +41,6 @@
 ### Bug Fixes
 
 * **lidarr:** indexer is optional ([60a470a](https://github.com/gnarr/splittarr/commit/60a470aab95eb4b3d632834c4445895b1380edaf))
-
-
-
-# [0.2.0](https://github.com/gnarr/splittarr/compare/v0.1.2...v0.2.0) (2022-09-25)
-
-
-### Features
-
-* **settings:** configurable format for shnsplit output ([#5](https://github.com/gnarr/splittarr/issues/5)) ([446c9e6](https://github.com/gnarr/splittarr/commit/446c9e6461168c2efb7efe8932504a3a01da658c))
 
 
 
