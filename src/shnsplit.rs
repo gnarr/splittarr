@@ -3,9 +3,9 @@ use crate::Download;
 use itertools::Itertools;
 use rcue::parser::parse_from_file;
 use regex::Regex;
+use std::path::PathBuf;
 use std::process::Command;
 use walkdir::DirEntry;
-use std::path::{PathBuf};
 
 pub async fn split(download: &mut Download, cue_entry: DirEntry) {
     let settings = Settings::new().unwrap();
@@ -51,7 +51,10 @@ pub async fn split(download: &mut Download, cue_entry: DirEntry) {
     }
     let files: Vec<String> = files.into_iter().unique().collect();
     if files.is_empty() {
-        println!("The cue file '{}' does not reference any audio files in the current directory.", cue_file_name);
+        println!(
+            "The cue file '{}' does not reference any audio files in the current directory.",
+            cue_file_name
+        );
         return;
     }
     for file in &files {
