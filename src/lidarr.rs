@@ -19,11 +19,13 @@ pub struct Queue {
 #[serde(rename_all = "camelCase")]
 pub struct Record {
     pub artist_id: i64,
-    pub album_id: Option<i64>,
+    pub album_id: i64,
     pub quality: Quality,
-    pub size: f64,
+    pub custom_formats: Vec<CustomFormat>,
+    pub custom_format_score: i64,
+    pub size: i64,
     pub title: String,
-    pub sizeleft: f64,
+    pub sizeleft: i64,
     pub status: String,
     pub tracked_download_status: String,
     pub tracked_download_state: String,
@@ -32,12 +34,12 @@ pub struct Record {
     pub download_id: String,
     pub protocol: String,
     pub download_client: String,
-    pub indexer: Option<String>,
-    pub output_path: String,
+    pub indexer: String,
     pub download_forced: bool,
     pub id: i64,
     pub timeleft: Option<String>,
     pub estimated_completion_time: Option<String>,
+    pub output_path: Option<String>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +62,13 @@ pub struct Revision {
     pub version: i64,
     pub real: i64,
     pub is_repack: bool,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomFormat {
+    pub id: i64,
+    pub name: String,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

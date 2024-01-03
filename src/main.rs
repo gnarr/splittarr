@@ -76,7 +76,7 @@ async fn main() -> Result<(), ExitFailure> {
                 let download = Download {
                     title: record.title,
                     status: record.status,
-                    output_path: record.output_path,
+                    output_path: record.output_path.unwrap(),
                     download_id: record.download_id,
                     tracked_download_state: record.tracked_download_state,
                     cue_files: vec![],
