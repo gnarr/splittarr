@@ -138,19 +138,12 @@ jobs:
 
       - name: Conventional commit check
         if: steps.release_input.outputs.mode == 'auto'
-        run: |
-          set -euo pipefail
-
-          curl -LsSf https://github.com/cocogitto/cocogitto/releases/latest/download/cocogitto-x86_64-unknown-linux-musl.tar.gz \
-            | tar xz -C "$RUNNER_TEMP"
-
-          "$RUNNER_TEMP/cog" --version
-
-          range="${{ steps.release_range.outputs.check_range }}"
-          echo "Checking conventional commits in range: $range"
-          git log --oneline --decorate "$range"
-
-          "$RUNNER_TEMP/cog" check "$range"
+        uses: cocogitto/cocogitto-action@v4
+        with:
+          command: check
+          args: ${{ steps.release_range.outputs.check_range }}
+          git-user: github-actions[bot]
+          git-user-email: 41898282+github-actions[bot]@users.noreply.github.com
 
       - name: Install Cocogitto for republish
         if: steps.release_input.outputs.mode == 'republish'
