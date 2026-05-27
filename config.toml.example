@@ -1,5 +1,14 @@
-check_frequency_seconds=60
+data_dir = "/config"
+check_frequency_seconds = 60
 
 [lidarr]
-url="https://lidarr.example.com"
-api_key="a3bb47a4968223c7568b06d4a2e9cf95"
+url = "https://lidarr.example.com"
+api_key = "a3bb47a4968223c7568b06d4a2e9cf95"
+
+[cue]
+strict = false
+
+[shnsplit]
+path = "shnsplit"
+overwrite = true
+format = "%p - %a - %n - %t"
