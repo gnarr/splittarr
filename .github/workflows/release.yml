@@ -272,7 +272,11 @@ jobs:
 
       - name: Create release commit and tag
         if: steps.release_plan.outputs.should_release == 'true'
-        run: cog bump --auto
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cog bump --auto
 
       - name: Push release commit and tag
         if: steps.release_plan.outputs.should_release == 'true'
