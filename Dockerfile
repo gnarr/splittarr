@@ -1,15 +1,27 @@
-FROM rust:1-slim-buster as builder
+# syntax=docker/dockerfile:1
 
-WORKDIR /usr/src/splittarr
-RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
-COPY . .
-RUN cargo install --path .
+FROM rust:1.95-bookworm AS builder
 
-FROM debian:buster-slim
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN --mount=type=cache,target=/app/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git/db \
+    cargo build --release && \
+    mkdir -p /app/build && \
+    cp /app/target/release/splittarr /app/build/splittarr
+
+FROM debian:bookworm-slim
 
 ENV SPLITTARR_DATA_DIR=/config
 
-RUN apt-get update && apt-get install -y cuetools shntool flac && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /usr/local/cargo/bin/splittarr /usr/local/bin/splittarr
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates cuetools flac shntool && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /config /data
+
+WORKDIR /app
+COPY --from=builder /app/build/splittarr /usr/local/bin/splittarr
 
 CMD ["splittarr"]
