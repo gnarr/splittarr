@@ -1,3 +1,7 @@
+# Changelog
+
+- - -
+
 ## [0.2.5](https://github.com/gnarr/splittarr/compare/v0.2.4...v0.2.5) (2024-01-03)
 
 
