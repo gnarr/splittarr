@@ -1,6 +1,23 @@
 # Changelog
 
 - - -
+## [v0.2.6](https://github.com/gnarr/splittarr/compare/4b6c1a77545c53a7508a6f6107d6dfa492a20fc8..v0.2.6) - 2026-05-27
+#### Bug Fixes
+- (**ci**) print cocogitto logs - ([7d60afc](https://github.com/gnarr/splittarr/commit/7d60afc0400cb7b632af3c37488b4e155a34f0ca)) - Gunnar Cortes
+- (**lidarr**) indexer can be undefined - ([4b6c1a7](https://github.com/gnarr/splittarr/commit/4b6c1a77545c53a7508a6f6107d6dfa492a20fc8)) - Gunnar Cortes Heimisson
+- force rebuild - ([7873c54](https://github.com/gnarr/splittarr/commit/7873c5413487d9131c73972cef6e4d0f66a85d57)) - Gunnar Cortes
+- update README and add license files - ([cd2db36](https://github.com/gnarr/splittarr/commit/cd2db36fec99c7433ea527e63343ed9283435a8b)) - Gunnar Cortes
+#### Documentation
+- (**changelog**) add cocogitto insertion separator - ([c9c6009](https://github.com/gnarr/splittarr/commit/c9c600978a1149830e666690b21ba60a6be76367)) - Gunnar Cortes
+#### Continuous Integration
+- (**release**) configure git author before release bump - ([90eb12e](https://github.com/gnarr/splittarr/commit/90eb12e80bd99718196d45527d5f3caadc0290ce)) - Gunnar Cortes
+- (**release**) use cocogitto action for commit check - ([3f9708a](https://github.com/gnarr/splittarr/commit/3f9708a7d89bb72e8ea10453dd909e1aa3e497d9)) - Gunnar Cortes
+- (**release**) modernize docker release pipeline (#9) - ([fb317c3](https://github.com/gnarr/splittarr/commit/fb317c3cfb7549402d2eea3e88986726cc0b7416)) - Gunnar Cortes
+#### Refactoring
+- (**core**) rewrite processing pipeline (#8) - ([8523fe7](https://github.com/gnarr/splittarr/commit/8523fe766a327a0004fe6c323131196473c5f68d)) - Gunnar Cortes
+
+- - -
+
 
 ## [0.2.5](https://github.com/gnarr/splittarr/compare/v0.2.4...v0.2.5) (2024-01-03)
 
