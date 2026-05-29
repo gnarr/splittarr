@@ -1,13 +1,18 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
+use anyhow::Result;
 use thiserror::Error;
 use walkdir::WalkDir;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CueScan {
-    pub cue_files: Vec<PathBuf>,
-    pub errors: Vec<String>,
-}
+use crate::application::ports::{CueScannerPort, GeneratedTrackCleanerPort};
+use crate::domain::CueScan;
+
+#[derive(Debug, Clone, Copy)]
+pub struct CueFileScanner;
+
+#[derive(Debug, Clone, Copy)]
+pub struct GeneratedTrackCleaner;
 
 #[derive(Debug, Error)]
 pub enum ScanError {
@@ -15,6 +20,22 @@ pub enum ScanError {
     MissingRoot(PathBuf),
     #[error("download output path is not a directory: {0}")]
     NotDirectory(PathBuf),
+}
+
+impl CueScannerPort for CueFileScanner {
+    fn find_cue_files(&self, root: &Path) -> Result<CueScan> {
+        find_cue_files(root).map_err(Into::into)
+    }
+}
+
+impl GeneratedTrackCleanerPort for GeneratedTrackCleaner {
+    fn remove_generated_track(&self, path: &Path) -> Result<()> {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
 }
 
 pub fn find_cue_files(root: &Path) -> Result<CueScan, ScanError> {
@@ -37,8 +58,7 @@ pub fn find_cue_files(root: &Path) -> Result<CueScan, ScanError> {
             }
         };
 
-        let file_type = entry.file_type();
-        if !file_type.is_file() {
+        if !entry.file_type().is_file() {
             continue;
         }
 
@@ -59,8 +79,6 @@ pub fn find_cue_files(root: &Path) -> Result<CueScan, ScanError> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use tempfile::tempdir;
 
     use super::*;

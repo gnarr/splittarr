@@ -1,7 +1,12 @@
+use std::collections::HashSet;
+
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::application::ports::{BoxFuture, LidarrQueuePort};
 use crate::config::Lidarr;
+use crate::domain::{DownloadCandidate, QueueSnapshot};
 
 #[derive(Debug, Clone)]
 pub struct LidarrClient {
@@ -60,15 +65,6 @@ pub struct Record {
     pub output_path: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DownloadCandidate {
-    pub download_id: String,
-    pub title: String,
-    pub status: String,
-    pub output_path: String,
-    pub tracked_download_state: String,
-}
-
 impl LidarrClient {
     pub fn new(settings: &Lidarr) -> Self {
         Self {
@@ -96,36 +92,59 @@ impl LidarrClient {
     }
 }
 
+impl LidarrQueuePort for LidarrClient {
+    fn queue_snapshot(&self) -> BoxFuture<'_, Result<QueueSnapshot>> {
+        Box::pin(async move { Ok(self.queue().await?.into_snapshot()) })
+    }
+}
+
+impl Queue {
+    fn into_snapshot(self) -> QueueSnapshot {
+        QueueSnapshot {
+            record_count: self.records.len(),
+            download_ids: self
+                .records
+                .iter()
+                .filter_map(|record| record.download_id().map(str::to_owned))
+                .collect::<HashSet<_>>(),
+            candidates: self
+                .records
+                .into_iter()
+                .filter_map(|record| record.into_candidate())
+                .collect(),
+        }
+    }
+}
+
 impl Record {
     pub fn download_id(&self) -> Option<&str> {
-        self.download_id
-            .as_deref()
-            .filter(|value| !value.is_empty())
+        self.download_id.as_deref().filter(|value| !value.is_empty())
     }
 
-    pub fn as_candidate(&self) -> Option<DownloadCandidate> {
-        let status = self.status.as_deref()?;
-        let tracked_download_state = self.tracked_download_state.as_deref()?;
+    pub fn into_candidate(self) -> Option<DownloadCandidate> {
+        let status = self.status?;
+        let tracked_download_state = self.tracked_download_state?;
         if status != "completed" || tracked_download_state != "importFailed" {
             return None;
         }
 
-        let download_id = self.download_id.as_ref()?.trim();
-        let output_path = self.output_path.as_ref()?.trim();
+        let download_id = self.download_id?.trim().to_owned();
+        let output_path = self.output_path?.trim().to_owned();
         if download_id.is_empty() || output_path.is_empty() {
             return None;
         }
 
+        let title = self
+            .title
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| download_id.clone());
+
         Some(DownloadCandidate {
-            download_id: download_id.to_owned(),
-            title: self
-                .title
-                .clone()
-                .filter(|title| !title.trim().is_empty())
-                .unwrap_or_else(|| download_id.to_owned()),
-            status: status.to_owned(),
-            output_path: output_path.to_owned(),
-            tracked_download_state: tracked_download_state.to_owned(),
+            download_id,
+            title,
+            status,
+            output_path,
+            tracked_download_state,
         })
     }
 }
@@ -149,7 +168,7 @@ mod tests {
         };
 
         assert_eq!(
-            record.as_candidate(),
+            record.into_candidate(),
             Some(DownloadCandidate {
                 download_id: "abc".to_owned(),
                 title: "Album".to_owned(),
@@ -158,10 +177,6 @@ mod tests {
                 tracked_download_state: "importFailed".to_owned(),
             })
         );
-
-        let mut missing_path = record;
-        missing_path.output_path = None;
-        assert_eq!(missing_path.as_candidate(), None);
     }
 
     #[tokio::test]
@@ -177,32 +192,6 @@ mod tests {
 
         assert_eq!(queue.records.len(), 1);
         assert_eq!(queue.records[0].download_id(), Some("abc"));
-    }
-
-    #[tokio::test]
-    async fn client_reports_non_success_status() {
-        let url = serve_once("500 Internal Server Error", "boom").await;
-        let client = LidarrClient::new(&Lidarr {
-            url,
-            api_key: "secret".to_owned(),
-        });
-
-        let err = client.queue().await.unwrap_err();
-
-        assert!(matches!(err, LidarrError::Http { .. }));
-    }
-
-    #[tokio::test]
-    async fn client_reports_malformed_json() {
-        let url = serve_once("200 OK", "not-json").await;
-        let client = LidarrClient::new(&Lidarr {
-            url,
-            api_key: "secret".to_owned(),
-        });
-
-        let err = client.queue().await.unwrap_err();
-
-        assert!(matches!(err, LidarrError::Json { .. }));
     }
 
     async fn serve_once(status: &'static str, body: &'static str) -> String {

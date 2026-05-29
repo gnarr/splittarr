@@ -1,9 +1,7 @@
-mod app;
+mod adapters;
+mod application;
 mod config;
-mod lidarr;
-mod scanner;
-mod splitter;
-mod store;
+mod domain;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -14,5 +12,5 @@ use crate::config::{Cli, Settings};
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let settings = Settings::load(cli.config).context("load settings")?;
-    app::run(settings).await
+    application::process_failed_lidarr_imports(settings).await
 }
