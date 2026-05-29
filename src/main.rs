@@ -2,7 +2,6 @@ mod adapters;
 mod application;
 mod config;
 mod domain;
-mod store;
 
 use anyhow::{Context, Result};
 use clap::Parser;
