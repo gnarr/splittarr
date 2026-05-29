@@ -1,10 +1,7 @@
-mod app;
+mod adapters;
 mod application;
 mod config;
 mod domain;
-mod lidarr;
-mod scanner;
-mod splitter;
 mod store;
 
 use anyhow::{Context, Result};
