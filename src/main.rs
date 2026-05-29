@@ -1,5 +1,7 @@
 mod app;
+mod application;
 mod config;
+mod domain;
 mod lidarr;
 mod scanner;
 mod splitter;
@@ -14,5 +16,5 @@ use crate::config::{Cli, Settings};
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let settings = Settings::load(cli.config).context("load settings")?;
-    app::run(settings).await
+    application::process_failed_lidarr_imports(settings).await
 }
