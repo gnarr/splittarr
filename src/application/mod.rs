@@ -1,9 +1,4 @@
 pub mod ports;
+pub mod process_failed_lidarr_imports;
 
-use anyhow::Result;
-
-use crate::config::Settings;
-
-pub async fn process_failed_lidarr_imports(settings: Settings) -> Result<()> {
-    crate::app::run(settings).await
-}
+pub use process_failed_lidarr_imports::process_failed_lidarr_imports;
