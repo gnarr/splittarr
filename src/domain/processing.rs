@@ -13,6 +13,7 @@ pub struct FailedImportCandidate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueSnapshot {
     pub total_records: usize,
+    pub pages_fetched: usize,
     pub active_download_ids: HashSet<String>,
     pub failed_imports: Vec<FailedImportCandidate>,
 }

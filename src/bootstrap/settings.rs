@@ -22,6 +22,8 @@ pub struct CueSettings {
 pub struct LidarrSettings {
     pub url: String,
     pub api_key: String,
+    pub queue_page_size: usize,
+    pub queue_max_pages: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -75,6 +77,8 @@ impl Settings {
             .set_default("check_frequency_seconds", 60)?
             .set_default("server.bind_address", "0.0.0.0:9899")?
             .set_default("cue.strict", false)?
+            .set_default("lidarr.queue_page_size", 100)?
+            .set_default("lidarr.queue_max_pages", 100)?
             .set_default("shnsplit.path", "shnsplit")?
             .set_default("shnsplit.overwrite", true)?
             .set_default("shnsplit.format", "%p - %a - %n - %t")?
@@ -128,6 +132,8 @@ data_dir = "/tmp/splittarr-data"
 [lidarr]
 url = "http://lidarr"
 api_key = "secret"
+queue_page_size = 25
+queue_max_pages = 20
 
 [server]
 bind_address = "127.0.0.1:9899"
@@ -151,6 +157,8 @@ format = "%n - %t"
         assert_eq!(settings.server.bind_address, "127.0.0.1:9899");
         assert!(settings.cue.strict);
         assert_eq!(settings.lidarr.url, "http://lidarr");
+        assert_eq!(settings.lidarr.queue_page_size, 25);
+        assert_eq!(settings.lidarr.queue_max_pages, 20);
         assert_eq!(settings.shnsplit.path, PathBuf::from("/usr/bin/shnsplit"));
         assert!(!settings.shnsplit.overwrite);
     }
