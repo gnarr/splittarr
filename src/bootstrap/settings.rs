@@ -32,9 +32,15 @@ pub struct ShnsplitSettings {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct ServerSettings {
+    pub bind_address: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Settings {
     pub data_dir: PathBuf,
     pub check_frequency_seconds: u64,
+    pub server: ServerSettings,
     pub cue: CueSettings,
     pub lidarr: LidarrSettings,
     pub shnsplit: ShnsplitSettings,
@@ -67,6 +73,7 @@ impl Settings {
         let mut builder = Config::builder()
             .set_default("data_dir", default_data_dir.to_string_lossy().to_string())?
             .set_default("check_frequency_seconds", 60)?
+            .set_default("server.bind_address", "0.0.0.0:9899")?
             .set_default("cue.strict", false)?
             .set_default("shnsplit.path", "shnsplit")?
             .set_default("shnsplit.overwrite", true)?
@@ -122,6 +129,9 @@ data_dir = "/tmp/splittarr-data"
 url = "http://lidarr"
 api_key = "secret"
 
+[server]
+bind_address = "127.0.0.1:9899"
+
 [cue]
 strict = true
 
@@ -138,6 +148,7 @@ format = "%n - %t"
 
         assert_eq!(settings.check_frequency_seconds, 5);
         assert_eq!(settings.data_dir, PathBuf::from("/tmp/splittarr-data"));
+        assert_eq!(settings.server.bind_address, "127.0.0.1:9899");
         assert!(settings.cue.strict);
         assert_eq!(settings.lidarr.url, "http://lidarr");
         assert_eq!(settings.shnsplit.path, PathBuf::from("/usr/bin/shnsplit"));
@@ -164,20 +175,24 @@ api_key = "file-secret"
 
         std::env::set_var("SPLITTARR_CHECK_FREQUENCY_SECONDS", "9");
         std::env::set_var("SPLITTARR_LIDARR__URL", "http://from-env");
+        std::env::set_var("SPLITTARR_SERVER__BIND_ADDRESS", "0.0.0.0:1234");
 
         let settings =
             Settings::load_with_paths(Some(config_path), tmp.path().join("default"), None).unwrap();
 
         std::env::remove_var("SPLITTARR_CHECK_FREQUENCY_SECONDS");
         std::env::remove_var("SPLITTARR_LIDARR__URL");
+        std::env::remove_var("SPLITTARR_SERVER__BIND_ADDRESS");
 
         assert_eq!(settings.check_frequency_seconds, 9);
         assert_eq!(settings.lidarr.url, "http://from-env");
         assert_eq!(settings.lidarr.api_key, "file-secret");
+        assert_eq!(settings.server.bind_address, "0.0.0.0:1234");
     }
 
     fn clear_test_env() {
         std::env::remove_var("SPLITTARR_CHECK_FREQUENCY_SECONDS");
         std::env::remove_var("SPLITTARR_LIDARR__URL");
+        std::env::remove_var("SPLITTARR_SERVER__BIND_ADDRESS");
     }
 }

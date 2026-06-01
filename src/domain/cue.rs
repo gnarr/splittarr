@@ -9,6 +9,7 @@ pub struct CueSheet {
     pub path: String,
     pub status: CueSheetStatus,
     pub message: Option<String>,
+    pub updated_at: String,
     pub tracks: Vec<GeneratedTrack>,
 }
 
@@ -47,5 +48,38 @@ impl CueSheetStatus {
 
     pub fn is_terminal_success(self) -> bool {
         matches!(self, Self::Split | Self::Skipped)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputFile {
+    pub id: String,
+    pub download_id: String,
+    pub cue_sheet_id: Option<String>,
+    pub path: String,
+    pub kind: InputFileKind,
+    pub size_bytes: Option<i64>,
+    pub captured_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputFileKind {
+    Cue,
+    Audio,
+}
+
+impl InputFileKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cue => "cue",
+            Self::Audio => "audio",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "audio" => Self::Audio,
+            _ => Self::Cue,
+        }
     }
 }

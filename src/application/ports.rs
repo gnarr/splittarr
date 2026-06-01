@@ -1,9 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 
 use crate::domain::{
-    CueSheet, CueSheetStatus, DiscoveredCueSheets, QueueSnapshot, SplitOutcome, TrackedDownload,
+    CueSheet, CueSheetStatus, DiscoveredCueSheets, InputFileKind, QueueSnapshot, RecordedTrack,
+    SplitOutcome, TrackCleanupOutcome, TrackCleanupStatus, TrackedDownload,
 };
 
 pub trait QueueSource {
@@ -12,22 +13,37 @@ pub trait QueueSource {
 
 pub trait DownloadStore {
     async fn load_tracked_downloads(&self) -> Result<Vec<TrackedDownload>>;
+    async fn get_tracked_download(&self, download_id: &str) -> Result<Option<TrackedDownload>>;
     async fn upsert_tracked_download(&self, download: &TrackedDownload) -> Result<()>;
-    async fn mark_download_complete(
+    async fn touch_download_queue_presence(&self, download_id: &str) -> Result<()>;
+    async fn mark_download_processing(&self, download_id: &str) -> Result<()>;
+    async fn mark_download_awaiting_import(&self, download_id: &str) -> Result<()>;
+    async fn mark_download_cleanup_started(&self, download_id: &str) -> Result<()>;
+    async fn mark_download_completed(&self, download_id: &str) -> Result<()>;
+    async fn mark_download_failed(&self, download_id: &str, last_error: Option<&str>) -> Result<()>;
+    async fn get_or_create_cue_sheet(&self, download_id: &str, path: &Path) -> Result<CueSheet>;
+    async fn record_input_file(
         &self,
         download_id: &str,
-        split_complete: bool,
-        last_error: Option<&str>,
+        cue_sheet_id: Option<&str>,
+        path: &Path,
+        kind: InputFileKind,
+        size_bytes: Option<i64>,
     ) -> Result<()>;
-    async fn get_or_create_cue_sheet(&self, download_id: &str, path: &Path) -> Result<CueSheet>;
     async fn record_cue_result(
         &self,
         cue_sheet: &CueSheet,
         status: CueSheetStatus,
         message: Option<&str>,
-        tracks: &[PathBuf],
+        tracks: &[RecordedTrack],
     ) -> Result<()>;
-    async fn delete_download(&self, download_id: &str) -> Result<()>;
+    async fn record_track_cleanup(
+        &self,
+        download_id: &str,
+        track_id: &str,
+        status: TrackCleanupStatus,
+        message: Option<&str>,
+    ) -> Result<()>;
 }
 
 pub trait CueScanner {
@@ -39,5 +55,6 @@ pub trait CueSplitter {
 }
 
 pub trait TrackCleanup {
-    async fn cleanup_download_tracks(&self, download: &TrackedDownload) -> Result<()>;
+    async fn cleanup_download_tracks(&self, download: &TrackedDownload)
+    -> Result<Vec<TrackCleanupOutcome>>;
 }
