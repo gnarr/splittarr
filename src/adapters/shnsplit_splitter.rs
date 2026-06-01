@@ -2,87 +2,56 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use anyhow::{anyhow, Result};
 use rcue::parser::parse_from_file;
 use regex::Regex;
-use thiserror::Error;
 
-use crate::config::{Cue, Shnsplit};
+use crate::application::ports::CueSplitter;
+use crate::domain::{SplitOutcome, SplitStatus};
 
 #[derive(Debug, Clone)]
-pub struct Splitter {
+pub struct ShnsplitCueSplitter {
     cue_strict: bool,
     shnsplit_path: PathBuf,
     overwrite: bool,
     format: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SplitResult {
-    pub status: SplitStatus,
-    pub tracks: Vec<PathBuf>,
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SplitStatus {
-    Split,
-    Skipped,
-}
-
-#[derive(Debug, Error)]
-pub enum SplitError {
-    #[error("cue path is not valid UTF-8: {0}")]
-    NonUtf8CuePath(PathBuf),
-    #[error("cue file has no parent directory: {0}")]
-    MissingCueDirectory(PathBuf),
-    #[error("cue file name is not valid UTF-8: {0}")]
-    NonUtf8CueFileName(PathBuf),
-    #[error("failed to parse cue file {path}: {message}")]
-    CueParse { path: PathBuf, message: String },
-    #[error("failed to run shnsplit for {path}: {source}")]
-    CommandStart {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-    #[error("shnsplit failed for {path} with status {status}: {stderr}")]
-    CommandFailed {
-        path: PathBuf,
-        status: String,
-        stderr: String,
-    },
-    #[error("shnsplit succeeded for {path} but no generated tracks were detected")]
-    NoGeneratedTracks { path: PathBuf, stderr: String },
-    #[error("shnsplit reported output that does not exist for {path}: {output}")]
-    MissingGeneratedTrack { path: PathBuf, output: PathBuf },
-}
-
-impl Splitter {
-    pub fn new(cue: &Cue, shnsplit: &Shnsplit) -> Self {
+impl ShnsplitCueSplitter {
+    pub fn new(cue_strict: bool, shnsplit_path: PathBuf, overwrite: bool, format: String) -> Self {
         Self {
-            cue_strict: cue.strict,
-            shnsplit_path: shnsplit.path.clone(),
-            overwrite: shnsplit.overwrite,
-            format: shnsplit.format.clone(),
+            cue_strict,
+            shnsplit_path,
+            overwrite,
+            format,
         }
     }
+}
 
-    pub fn split_cue(&self, cue_path: &Path) -> Result<SplitResult, SplitError> {
+impl CueSplitter for ShnsplitCueSplitter {
+    async fn split_cue(&self, cue_path: &Path) -> Result<SplitOutcome> {
+        let splitter = self.clone();
+        let cue_path = cue_path.to_path_buf();
+        tokio::task::spawn_blocking(move || splitter.split_cue_sync(&cue_path))
+            .await
+            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
+}
+
+impl ShnsplitCueSplitter {
+    fn split_cue_sync(&self, cue_path: &Path) -> Result<SplitOutcome> {
         let cue_path_str = cue_path
             .to_str()
-            .ok_or_else(|| SplitError::NonUtf8CuePath(cue_path.to_path_buf()))?;
+            .ok_or_else(|| anyhow!("cue path is not valid UTF-8: {}", cue_path.display()))?;
         let cue_dir = cue_path
             .parent()
-            .ok_or_else(|| SplitError::MissingCueDirectory(cue_path.to_path_buf()))?;
+            .ok_or_else(|| anyhow!("cue file has no parent directory: {}", cue_path.display()))?;
         let cue_file_name = cue_path
             .file_name()
-            .ok_or_else(|| SplitError::NonUtf8CueFileName(cue_path.to_path_buf()))?;
+            .ok_or_else(|| anyhow!("cue file name is not valid UTF-8: {}", cue_path.display()))?;
 
-        let cue = parse_from_file(cue_path_str, self.cue_strict).map_err(|source| {
-            SplitError::CueParse {
-                path: cue_path.to_path_buf(),
-                message: source.to_string(),
-            }
-        })?;
+        let cue = parse_from_file(cue_path_str, self.cue_strict)
+            .map_err(|err| anyhow!("failed to parse cue file {}: {err}", cue_path.display()))?;
 
         let referenced_files = cue
             .files
@@ -92,7 +61,7 @@ impl Splitter {
             .collect::<BTreeSet<_>>();
 
         if referenced_files.is_empty() {
-            return Ok(SplitResult {
+            return Ok(SplitOutcome {
                 status: SplitStatus::Skipped,
                 tracks: Vec::new(),
                 message: Some("cue file does not reference an audio file in its directory".into()),
@@ -119,44 +88,42 @@ impl Splitter {
                 command.arg(file);
             }
 
-            command
-                .output()
-                .map_err(|source| SplitError::CommandStart {
-                    path: cue_path.to_path_buf(),
-                    source,
-                })?
+            command.output().map_err(|err| {
+                anyhow!("failed to run shnsplit for {}: {err}", cue_path.display())
+            })?
         };
 
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         if !output.status.success() {
-            return Err(SplitError::CommandFailed {
-                path: cue_path.to_path_buf(),
-                status: output.status.code().map_or_else(
-                    || "terminated by signal".to_owned(),
-                    |code| code.to_string(),
-                ),
-                stderr,
-            });
+            let status = output.status.code().map_or_else(
+                || "terminated by signal".to_owned(),
+                |code| code.to_string(),
+            );
+            return Err(anyhow!(
+                "shnsplit failed for {} with status {status}: {stderr}",
+                cue_path.display()
+            ));
         }
 
         let tracks = parse_generated_tracks(cue_dir, &stderr);
         if tracks.is_empty() {
-            return Err(SplitError::NoGeneratedTracks {
-                path: cue_path.to_path_buf(),
-                stderr,
-            });
+            return Err(anyhow!(
+                "shnsplit succeeded for {} but no generated tracks were detected",
+                cue_path.display()
+            ));
         }
 
         for track in &tracks {
             if !track.exists() {
-                return Err(SplitError::MissingGeneratedTrack {
-                    path: cue_path.to_path_buf(),
-                    output: track.clone(),
-                });
+                return Err(anyhow!(
+                    "shnsplit reported output that does not exist for {}: {}",
+                    cue_path.display(),
+                    track.display()
+                ));
             }
         }
 
-        Ok(SplitResult {
+        Ok(SplitOutcome {
             status: SplitStatus::Split,
             tracks,
             message: None,
@@ -185,13 +152,15 @@ fn parse_generated_tracks(cue_dir: &Path, stderr: &str) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::{Path, PathBuf};
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     use tempfile::tempdir;
 
-    use super::*;
+    use super::{parse_generated_tracks, ShnsplitCueSplitter};
+    use crate::domain::SplitStatus;
 
     #[test]
     fn splits_with_fake_shnsplit_and_records_absolute_tracks() {
@@ -206,7 +175,7 @@ exit 0
         );
         let splitter = test_splitter(fake);
 
-        let result = splitter.split_cue(&cue_path).unwrap();
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
 
         assert_eq!(result.status, SplitStatus::Split);
         assert_eq!(
@@ -222,7 +191,7 @@ exit 0
         let fake = write_fake_shnsplit(tmp.path(), "exit 1\n");
         let splitter = test_splitter(fake);
 
-        let result = splitter.split_cue(&cue_path).unwrap();
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
 
         assert_eq!(result.status, SplitStatus::Skipped);
         assert!(result.tracks.is_empty());
@@ -241,9 +210,9 @@ exit 2
         );
         let splitter = test_splitter(fake);
 
-        let err = splitter.split_cue(&cue_path).unwrap_err();
+        let err = splitter.split_cue_sync(&cue_path).unwrap_err();
 
-        assert!(matches!(err, SplitError::CommandFailed { .. }));
+        assert!(err.to_string().contains("shnsplit failed"));
     }
 
     #[test]
@@ -256,15 +225,8 @@ exit 2
         assert_eq!(tracks, vec![tmp.path().join("01 - Track.flac")]);
     }
 
-    fn test_splitter(shnsplit_path: PathBuf) -> Splitter {
-        Splitter::new(
-            &Cue { strict: false },
-            &Shnsplit {
-                path: shnsplit_path,
-                overwrite: true,
-                format: "%p - %a - %n - %t".into(),
-            },
-        )
+    fn test_splitter(shnsplit_path: PathBuf) -> ShnsplitCueSplitter {
+        ShnsplitCueSplitter::new(true, shnsplit_path, true, "%p - %a - %n - %t".into())
     }
 
     fn write_fixture_album(dir: &Path, with_audio: bool) -> PathBuf {

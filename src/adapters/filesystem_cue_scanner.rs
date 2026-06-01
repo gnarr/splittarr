@@ -1,28 +1,41 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use thiserror::Error;
+use anyhow::{anyhow, Result};
 use walkdir::WalkDir;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CueScan {
-    pub cue_files: Vec<PathBuf>,
-    pub errors: Vec<String>,
+use crate::application::ports::CueScanner;
+use crate::domain::DiscoveredCueSheets;
+
+#[derive(Debug, Clone, Default)]
+pub struct FilesystemCueScanner;
+
+impl FilesystemCueScanner {
+    pub fn new() -> Self {
+        Self
+    }
 }
 
-#[derive(Debug, Error)]
-pub enum ScanError {
-    #[error("download output path does not exist: {0}")]
-    MissingRoot(PathBuf),
-    #[error("download output path is not a directory: {0}")]
-    NotDirectory(PathBuf),
+impl CueScanner for FilesystemCueScanner {
+    async fn find_cue_sheets(&self, root: &Path) -> Result<DiscoveredCueSheets> {
+        let root = root.to_path_buf();
+        tokio::task::spawn_blocking(move || find_cue_files(&root))
+            .await
+            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
 }
 
-pub fn find_cue_files(root: &Path) -> Result<CueScan, ScanError> {
+fn find_cue_files(root: &Path) -> Result<DiscoveredCueSheets> {
     if !root.exists() {
-        return Err(ScanError::MissingRoot(root.to_path_buf()));
+        return Err(anyhow!(
+            "download output path does not exist: {}",
+            root.display()
+        ));
     }
     if !root.is_dir() {
-        return Err(ScanError::NotDirectory(root.to_path_buf()));
+        return Err(anyhow!(
+            "download output path is not a directory: {}",
+            root.display()
+        ));
     }
 
     let mut cue_files = Vec::new();
@@ -37,8 +50,7 @@ pub fn find_cue_files(root: &Path) -> Result<CueScan, ScanError> {
             }
         };
 
-        let file_type = entry.file_type();
-        if !file_type.is_file() {
+        if !entry.file_type().is_file() {
             continue;
         }
 
@@ -54,7 +66,7 @@ pub fn find_cue_files(root: &Path) -> Result<CueScan, ScanError> {
     }
 
     cue_files.sort();
-    Ok(CueScan { cue_files, errors })
+    Ok(DiscoveredCueSheets { cue_files, errors })
 }
 
 #[cfg(test)]
@@ -63,7 +75,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::*;
+    use super::find_cue_files;
 
     #[test]
     fn finds_cue_files_case_insensitively() {
@@ -85,6 +97,8 @@ mod tests {
         let tmp = tempdir().unwrap();
         let err = find_cue_files(&tmp.path().join("missing")).unwrap_err();
 
-        assert!(matches!(err, ScanError::MissingRoot(_)));
+        assert!(err
+            .to_string()
+            .contains("download output path does not exist"));
     }
 }
