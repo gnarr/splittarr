@@ -11,12 +11,16 @@ use crate::domain::{FailedImportCandidate, QueueSnapshot};
 pub struct LidarrQueueSource {
     base_url: String,
     api_key: String,
+    page_size: usize,
+    max_pages: usize,
     client: reqwest::Client,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct QueueResponse {
+    #[serde(default)]
+    total_records: Option<usize>,
     #[serde(default)]
     records: Vec<QueueRecord>,
 }
@@ -41,6 +45,8 @@ impl LidarrQueueSource {
         Self {
             base_url: settings.url.trim_end_matches('/').to_owned(),
             api_key: settings.api_key.clone(),
+            page_size: settings.queue_page_size.max(1),
+            max_pages: settings.queue_max_pages.max(1),
             client: reqwest::Client::new(),
         }
     }
@@ -48,36 +54,77 @@ impl LidarrQueueSource {
 
 impl QueueSource for LidarrQueueSource {
     async fn queue_snapshot(&self) -> Result<QueueSnapshot> {
-        let response = self
-            .client
-            .get(format!("{}/api/v1/queue", self.base_url))
-            .header("x-api-key", &self.api_key)
-            .send()
-            .await?;
-        let status = response.status();
-        let body = response.text().await?;
+        let mut page = 1_usize;
+        let mut pages_fetched = 0_usize;
+        let mut all_records = Vec::new();
+        let mut expected_total_records = None;
 
-        if !status.is_success() {
-            return Err(anyhow!("lidarr returned HTTP {status}: {body}"));
+        loop {
+            if page > self.max_pages {
+                return Err(anyhow!(
+                    "lidarr queue pagination exceeded max pages ({}) while fetching page {}",
+                    self.max_pages,
+                    page
+                ));
+            }
+
+            let response = self
+                .client
+                .get(format!("{}/api/v1/queue", self.base_url))
+                .query(&[("page", page), ("pageSize", self.page_size)])
+                .header("x-api-key", &self.api_key)
+                .send()
+                .await
+                .map_err(|err| anyhow!("failed requesting lidarr queue page {page}: {err}"))?;
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .map_err(|err| anyhow!("failed reading lidarr queue page {page}: {err}"))?;
+
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "lidarr returned HTTP {status} for queue page {page}: {body}"
+                ));
+            }
+
+            let queue: QueueResponse = serde_json::from_str(&body).map_err(|err| {
+                anyhow!("lidarr returned invalid queue JSON for page {page}: {err}; body: {body}")
+            })?;
+
+            pages_fetched += 1;
+            expected_total_records = expected_total_records.or(queue.total_records);
+            let current_page_count = queue.records.len();
+            all_records.extend(queue.records);
+
+            if current_page_count == 0 {
+                break;
+            }
+            if let Some(total) = expected_total_records {
+                if all_records.len() >= total {
+                    break;
+                }
+            }
+            if current_page_count < self.page_size {
+                break;
+            }
+
+            page += 1;
         }
 
-        let queue: QueueResponse = serde_json::from_str(&body)
-            .map_err(|err| anyhow!("lidarr returned invalid queue JSON: {err}; body: {body}"))?;
-
-        let active_download_ids = queue
-            .records
+        let active_download_ids = all_records
             .iter()
             .filter_map(QueueRecord::download_id)
             .map(str::to_owned)
             .collect::<HashSet<_>>();
-        let failed_imports = queue
-            .records
+        let failed_imports = all_records
             .iter()
             .filter_map(QueueRecord::as_candidate)
             .collect::<Vec<_>>();
 
         Ok(QueueSnapshot {
-            total_records: queue.records.len(),
+            total_records: all_records.len(),
+            pages_fetched,
             active_download_ids,
             failed_imports,
         })
@@ -120,6 +167,9 @@ impl QueueRecord {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -161,12 +211,82 @@ mod tests {
         let client = LidarrQueueSource::new(&LidarrSettings {
             url,
             api_key: "secret".to_owned(),
+            queue_page_size: 100,
+            queue_max_pages: 100,
         });
 
         let queue = client.queue_snapshot().await.unwrap();
 
         assert_eq!(queue.total_records, 1);
+        assert_eq!(queue.pages_fetched, 1);
         assert!(queue.active_download_ids.contains("abc"));
+    }
+
+    #[tokio::test]
+    async fn client_fetches_multiple_pages_and_collects_failed_imports() {
+        let (url, _) = serve_sequence(vec![
+            (
+                "200 OK",
+                r#"{"totalRecords":2,"records":[{"title":"Downloading","status":"warning","trackedDownloadState":"downloading","downloadId":"down-1","outputPath":"/downloads/down-1"}]}"#,
+            ),
+            (
+                "200 OK",
+                r#"{"totalRecords":2,"records":[{"title":"Failed","status":"completed","trackedDownloadState":"importFailed","downloadId":"fail-1","outputPath":"/downloads/fail-1"}]}"#,
+            ),
+        ])
+        .await;
+        let client = LidarrQueueSource::new(&LidarrSettings {
+            url,
+            api_key: "secret".to_owned(),
+            queue_page_size: 1,
+            queue_max_pages: 100,
+        });
+
+        let queue = client.queue_snapshot().await.unwrap();
+
+        assert_eq!(queue.total_records, 2);
+        assert_eq!(queue.pages_fetched, 2);
+        assert!(queue.active_download_ids.contains("down-1"));
+        assert!(queue.active_download_ids.contains("fail-1"));
+        assert_eq!(queue.failed_imports.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn client_stops_when_short_page_is_returned() {
+        let (url, requests) = serve_sequence(vec![(
+            "200 OK",
+            r#"{"records":[{"title":"Album","status":"completed","trackedDownloadState":"importFailed","downloadId":"abc","outputPath":"/downloads/album"}]}"#,
+        )])
+        .await;
+        let client = LidarrQueueSource::new(&LidarrSettings {
+            url,
+            api_key: "secret".to_owned(),
+            queue_page_size: 100,
+            queue_max_pages: 100,
+        });
+
+        let queue = client.queue_snapshot().await.unwrap();
+        assert_eq!(queue.pages_fetched, 1);
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn client_stops_when_empty_page_is_returned() {
+        let (url, requests) = serve_sequence(vec![
+            ("200 OK", r#"{"totalRecords":5,"records":[{"downloadId":"a"}]}"#),
+            ("200 OK", r#"{"totalRecords":5,"records":[]}"#),
+        ])
+        .await;
+        let client = LidarrQueueSource::new(&LidarrSettings {
+            url,
+            api_key: "secret".to_owned(),
+            queue_page_size: 1,
+            queue_max_pages: 100,
+        });
+
+        let queue = client.queue_snapshot().await.unwrap();
+        assert_eq!(queue.pages_fetched, 2);
+        assert_eq!(requests.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -175,11 +295,14 @@ mod tests {
         let client = LidarrQueueSource::new(&LidarrSettings {
             url,
             api_key: "secret".to_owned(),
+            queue_page_size: 100,
+            queue_max_pages: 100,
         });
 
         let err = client.queue_snapshot().await.unwrap_err();
 
         assert!(err.to_string().contains("HTTP 500"));
+        assert!(err.to_string().contains("page 1"));
     }
 
     #[tokio::test]
@@ -188,26 +311,75 @@ mod tests {
         let client = LidarrQueueSource::new(&LidarrSettings {
             url,
             api_key: "secret".to_owned(),
+            queue_page_size: 100,
+            queue_max_pages: 100,
         });
 
         let err = client.queue_snapshot().await.unwrap_err();
 
         assert!(err.to_string().contains("invalid queue JSON"));
+        assert!(err.to_string().contains("page 1"));
+    }
+
+    #[tokio::test]
+    async fn client_errors_when_max_pages_is_exceeded() {
+        let (url, _) = serve_sequence(vec![
+            ("200 OK", r#"{"totalRecords":999,"records":[{"downloadId":"a"}]}"#),
+            ("200 OK", r#"{"totalRecords":999,"records":[{"downloadId":"b"}]}"#),
+            ("200 OK", r#"{"totalRecords":999,"records":[{"downloadId":"c"}]}"#),
+        ])
+        .await;
+        let client = LidarrQueueSource::new(&LidarrSettings {
+            url,
+            api_key: "secret".to_owned(),
+            queue_page_size: 1,
+            queue_max_pages: 2,
+        });
+
+        let err = client.queue_snapshot().await.unwrap_err();
+        assert!(err.to_string().contains("exceeded max pages"));
     }
 
     async fn serve_once(status: &'static str, body: &'static str) -> String {
+        let (url, _) = serve_sequence(vec![(status, body)]).await;
+        url
+    }
+
+    async fn serve_sequence(
+        responses: Vec<(&'static str, &'static str)>,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let request_lines = Arc::new(Mutex::new(Vec::new()));
+        let shared_lines = Arc::clone(&request_lines);
+        let shared_responses = Arc::new(Mutex::new(
+            responses.into_iter().collect::<VecDeque<(&'static str, &'static str)>>(),
+        ));
+        let queue = Arc::clone(&shared_responses);
+
         tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = socket.read(&mut request).await.unwrap();
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            socket.write_all(response.as_bytes()).await.unwrap();
+            loop {
+                let next = { queue.lock().unwrap().pop_front() };
+                let Some((status, body)) = next else {
+                    break;
+                };
+
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let bytes_read = socket.read(&mut request).await.unwrap();
+                let request_text = String::from_utf8_lossy(&request[..bytes_read]);
+                if let Some(line) = request_text.lines().next() {
+                    shared_lines.lock().unwrap().push(line.to_owned());
+                }
+
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
         });
-        format!("http://{addr}")
+
+        (format!("http://{addr}"), request_lines)
     }
 }

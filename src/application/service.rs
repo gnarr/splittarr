@@ -78,6 +78,7 @@ where
             "Found {} records in Lidarr's download queue",
             snapshot.total_records
         );
+        println!("Fetched {} queue page(s) from Lidarr", snapshot.pages_fetched);
 
         register_failed_imports(
             &self.download_store,
@@ -227,6 +228,7 @@ FILE "album.flac" WAVE
 
         let snapshot_active = QueueSnapshot {
             total_records: 1,
+            pages_fetched: 1,
             active_download_ids: HashSet::from(["download-1".to_owned()]),
             failed_imports: vec![FailedImportCandidate {
                 download_id: "download-1".into(),
@@ -238,6 +240,7 @@ FILE "album.flac" WAVE
         };
         let snapshot_gone = QueueSnapshot {
             total_records: 0,
+            pages_fetched: 1,
             active_download_ids: HashSet::new(),
             failed_imports: Vec::new(),
         };
