@@ -14,18 +14,18 @@ pub struct Cli {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct Cue {
+pub struct CueSettings {
     pub strict: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct Lidarr {
+pub struct LidarrSettings {
     pub url: String,
     pub api_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct Shnsplit {
+pub struct ShnsplitSettings {
     pub path: PathBuf,
     pub overwrite: bool,
     pub format: String,
@@ -35,9 +35,9 @@ pub struct Shnsplit {
 pub struct Settings {
     pub data_dir: PathBuf,
     pub check_frequency_seconds: u64,
-    pub cue: Cue,
-    pub lidarr: Lidarr,
-    pub shnsplit: Shnsplit,
+    pub cue: CueSettings,
+    pub lidarr: LidarrSettings,
+    pub shnsplit: ShnsplitSettings,
 }
 
 #[derive(Debug, Error)]
