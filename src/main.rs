@@ -11,6 +11,7 @@ use crate::adapters::filesystem_cue_scanner::FilesystemCueScanner;
 use crate::adapters::lidarr_api::LidarrQueueSource;
 use crate::adapters::shnsplit_splitter::ShnsplitCueSplitter;
 use crate::adapters::sqlite_download_store::SqliteDownloadStore;
+use crate::adapters::web;
 use crate::application::service::MonitorService;
 use crate::bootstrap::settings::{Cli, Settings};
 
@@ -21,6 +22,7 @@ async fn main() -> Result<()> {
     let queue_source = LidarrQueueSource::new(&settings.lidarr);
     let download_store =
         SqliteDownloadStore::open(&settings.data_dir).context("initialize Splittarr database")?;
+    let web_store = download_store.clone();
     let cue_scanner = FilesystemCueScanner::new();
     let cue_splitter = ShnsplitCueSplitter::new(
         settings.cue.strict,
@@ -37,6 +39,18 @@ async fn main() -> Result<()> {
         track_cleanup,
         settings.check_frequency_seconds,
     );
+    let listener = tokio::net::TcpListener::bind(&settings.server.bind_address)
+        .await
+        .with_context(|| format!("bind {}", settings.server.bind_address))?;
+    let app = web::router(web_store);
 
-    service.run().await
+    println!("Web UI listening on http://{}", settings.server.bind_address);
+
+    tokio::spawn(async move {
+        if let Err(err) = service.run().await {
+            eprintln!("monitor exited: {err:#}");
+        }
+    });
+
+    axum::serve(listener, app).await.context("run web server")
 }

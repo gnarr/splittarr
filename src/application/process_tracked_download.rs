@@ -1,10 +1,13 @@
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use rcue::parser::parse_from_file;
 
 use crate::application::ports::{CueScanner, CueSplitter, DownloadStore};
 use crate::domain::{
-    CueSheet, CueSheetStatus, FailedImportCandidate, SplitOutcome, SplitStatus, TrackedDownload,
+    CueSheet, CueSheetStatus, FailedImportCandidate, InputFileKind, RecordedTrack, SplitOutcome,
+    SplitStatus, TrackedDownload,
 };
 
 pub async fn register_failed_imports<S: DownloadStore>(
@@ -21,6 +24,7 @@ pub async fn register_failed_imports<S: DownloadStore>(
             download.status = candidate.status.clone();
             download.output_path = candidate.output_path.clone();
             download.tracked_download_state = candidate.tracked_download_state.clone();
+            store.touch_download_queue_presence(&download.download_id).await?;
             store.upsert_tracked_download(download).await?;
             continue;
         }
@@ -50,6 +54,7 @@ where
     C: CueScanner,
     P: CueSplitter,
 {
+    store.mark_download_processing(&download.download_id).await?;
     let output_path = PathBuf::from(&download.output_path);
     let scan = scanner.find_cue_sheets(&output_path).await?;
 
@@ -59,7 +64,7 @@ where
 
     if scan.cue_files.is_empty() {
         store
-            .mark_download_complete(&download.download_id, false, Some("no cue files found"))
+            .mark_download_failed(&download.download_id, Some("no cue files found"))
             .await?;
         return Ok(());
     }
@@ -71,6 +76,7 @@ where
         let cue_sheet = store
             .get_or_create_cue_sheet(&download.download_id, &cue_path)
             .await?;
+        snapshot_input_files(store, &download.download_id, &cue_sheet, &cue_path).await?;
 
         if cue_sheet.status.is_terminal_success() {
             continue;
@@ -96,13 +102,15 @@ where
     } else {
         Some(failures.join("; "))
     };
-    store
-        .mark_download_complete(
-            &download.download_id,
-            all_cues_complete,
-            error_message.as_deref(),
-        )
-        .await?;
+    if all_cues_complete {
+        store
+            .mark_download_awaiting_import(&download.download_id)
+            .await?;
+    } else {
+        store
+            .mark_download_failed(&download.download_id, error_message.as_deref())
+            .await?;
+    }
 
     println!("Done processing {}", download.title);
     Ok(())
@@ -117,7 +125,58 @@ async fn store_split_result<S: DownloadStore>(
         SplitStatus::Split => CueSheetStatus::Split,
         SplitStatus::Skipped => CueSheetStatus::Skipped,
     };
+    let tracks = result
+        .tracks
+        .iter()
+        .map(|path| RecordedTrack {
+            path: path.to_string_lossy().to_string(),
+            size_bytes: file_size(path),
+        })
+        .collect::<Vec<_>>();
     store
-        .record_cue_result(cue_sheet, status, result.message.as_deref(), &result.tracks)
+        .record_cue_result(cue_sheet, status, result.message.as_deref(), &tracks)
         .await
+}
+
+async fn snapshot_input_files<S: DownloadStore>(
+    store: &S,
+    download_id: &str,
+    cue_sheet: &CueSheet,
+    cue_path: &Path,
+) -> Result<()> {
+    store
+        .record_input_file(
+            download_id,
+            Some(&cue_sheet.id),
+            cue_path,
+            InputFileKind::Cue,
+            file_size(cue_path),
+        )
+        .await?;
+
+    let cue_path_str = cue_path.to_string_lossy();
+    let cue = parse_from_file(&cue_path_str, false)?;
+    let cue_dir = cue_path.parent().unwrap_or_else(|| Path::new("."));
+
+    for input in cue.files.iter().map(|file| cue_dir.join(&file.file)) {
+        if input.exists() {
+            store
+                .record_input_file(
+                    download_id,
+                    Some(&cue_sheet.id),
+                    &input,
+                    InputFileKind::Audio,
+                    file_size(&input),
+                )
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn file_size(path: &Path) -> Option<i64> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|metadata| i64::try_from(metadata.len()).ok())
 }

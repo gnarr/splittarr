@@ -102,7 +102,7 @@ where
                 eprintln!("Failed processing {}: {err:#}", download.title);
                 let message = err.to_string();
                 self.download_store
-                    .mark_download_complete(&download.download_id, false, Some(&message))
+                    .mark_download_failed(&download.download_id, Some(&message))
                     .await?;
             }
         }
@@ -118,5 +118,159 @@ where
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    use tempfile::tempdir;
+
+    use super::MonitorService;
+    use crate::adapters::sqlite_download_store::SqliteDownloadStore;
+    use crate::application::ports::{
+        CueScanner, CueSplitter, DownloadStore, QueueSource, TrackCleanup,
+    };
+    use crate::domain::{
+        DiscoveredCueSheets, DownloadLifecycleState, FailedImportCandidate, QueueSnapshot,
+        RecordedTrack, SplitOutcome, SplitStatus, TrackCleanupOutcome, TrackCleanupStatus,
+    };
+
+    struct FakeQueue {
+        snapshots: Mutex<Vec<QueueSnapshot>>,
+    }
+
+    impl QueueSource for FakeQueue {
+        async fn queue_snapshot(&self) -> anyhow::Result<QueueSnapshot> {
+            let mut snapshots = self.snapshots.lock().unwrap();
+            Ok(if snapshots.len() > 1 {
+                snapshots.remove(0)
+            } else {
+                snapshots[0].clone()
+            })
+        }
+    }
+
+    struct FakeScanner {
+        cue_path: PathBuf,
+    }
+
+    impl CueScanner for FakeScanner {
+        async fn find_cue_sheets(&self, _root: &Path) -> anyhow::Result<DiscoveredCueSheets> {
+            Ok(DiscoveredCueSheets {
+                cue_files: vec![self.cue_path.clone()],
+                errors: Vec::new(),
+            })
+        }
+    }
+
+    struct FakeSplitter {
+        output_track: PathBuf,
+    }
+
+    impl CueSplitter for FakeSplitter {
+        async fn split_cue(&self, _cue_path: &Path) -> anyhow::Result<SplitOutcome> {
+            fs::write(&self.output_track, b"track").unwrap();
+            Ok(SplitOutcome {
+                status: SplitStatus::Split,
+                tracks: vec![self.output_track.clone()],
+                message: None,
+            })
+        }
+    }
+
+    struct FakeCleanup;
+
+    impl TrackCleanup for FakeCleanup {
+        async fn cleanup_download_tracks(
+            &self,
+            download: &crate::domain::TrackedDownload,
+        ) -> anyhow::Result<Vec<TrackCleanupOutcome>> {
+            Ok(download
+                .cue_sheets
+                .iter()
+                .flat_map(|cue| cue.tracks.iter())
+                .map(|track| TrackCleanupOutcome {
+                    track_id: track.id.clone(),
+                    status: TrackCleanupStatus::Deleted,
+                    message: None,
+                })
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn run_once_processes_then_completes_without_deleting_history() {
+        let tmp = tempdir().unwrap();
+        let album_dir = tmp.path().join("album");
+        fs::create_dir_all(&album_dir).unwrap();
+        let cue_path = album_dir.join("album.cue");
+        let audio_path = album_dir.join("album.flac");
+        let split_track = album_dir.join("01 - Track.flac");
+        fs::write(
+            &cue_path,
+            r#"PERFORMER "Artist"
+TITLE "Album"
+FILE "album.flac" WAVE
+  TRACK 01 AUDIO
+    TITLE "Track One"
+    PERFORMER "Artist"
+    INDEX 01 00:00:00
+"#,
+        )
+        .unwrap();
+        fs::write(&audio_path, b"audio").unwrap();
+
+        let snapshot_active = QueueSnapshot {
+            total_records: 1,
+            active_download_ids: HashSet::from(["download-1".to_owned()]),
+            failed_imports: vec![FailedImportCandidate {
+                download_id: "download-1".into(),
+                title: "Album".into(),
+                status: "completed".into(),
+                output_path: album_dir.to_string_lossy().to_string(),
+                tracked_download_state: "importFailed".into(),
+            }],
+        };
+        let snapshot_gone = QueueSnapshot {
+            total_records: 0,
+            active_download_ids: HashSet::new(),
+            failed_imports: Vec::new(),
+        };
+        let queue = FakeQueue {
+            snapshots: Mutex::new(vec![snapshot_active, snapshot_gone]),
+        };
+        let store = SqliteDownloadStore::open(tmp.path()).unwrap();
+        let service = MonitorService::new(
+            queue,
+            store.clone(),
+            FakeScanner {
+                cue_path: cue_path.clone(),
+            },
+            FakeSplitter {
+                output_track: split_track.clone(),
+            },
+            FakeCleanup,
+            60,
+        );
+
+        service.run_once().await.unwrap();
+        let after_split = store.get_tracked_download("download-1").await.unwrap().unwrap();
+        assert_eq!(after_split.lifecycle_state, DownloadLifecycleState::AwaitingImport);
+        assert_eq!(after_split.generated_track_count(), 1);
+        assert_eq!(after_split.input_files.len(), 2);
+
+        service.run_once().await.unwrap();
+        let completed = store.get_tracked_download("download-1").await.unwrap().unwrap();
+        assert_eq!(completed.lifecycle_state, DownloadLifecycleState::Completed);
+        assert_eq!(
+            completed.cue_sheets[0].tracks[0].cleanup_status,
+            TrackCleanupStatus::Deleted
+        );
+        assert!(completed.completed_at.is_some());
     }
 }
