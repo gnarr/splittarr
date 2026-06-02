@@ -75,7 +75,7 @@ impl Settings {
         let mut builder = Config::builder()
             .set_default("data_dir", default_data_dir.to_string_lossy().to_string())?
             .set_default("check_frequency_seconds", 60)?
-            .set_default("server.bind_address", "0.0.0.0:9899")?
+            .set_default("server.bind_address", "127.0.0.1:9899")?
             .set_default("cue.strict", false)?
             .set_default("lidarr.queue_page_size", 100)?
             .set_default("lidarr.queue_max_pages", 100)?
