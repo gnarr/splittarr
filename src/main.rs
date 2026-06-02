@@ -44,7 +44,10 @@ async fn main() -> Result<()> {
         .with_context(|| format!("bind {}", settings.server.bind_address))?;
     let app = web::router(web_store);
 
-    println!("Web UI listening on http://{}", settings.server.bind_address);
+    println!(
+        "Web UI listening on http://{}",
+        settings.server.bind_address
+    );
 
     spawn_monitor_thread(service).context("start monitor thread")?;
 

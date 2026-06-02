@@ -22,7 +22,8 @@ pub trait DownloadStore {
     async fn mark_download_awaiting_import(&self, download_id: &str) -> Result<()>;
     async fn mark_download_cleanup_started(&self, download_id: &str) -> Result<()>;
     async fn mark_download_completed(&self, download_id: &str) -> Result<()>;
-    async fn mark_download_failed(&self, download_id: &str, last_error: Option<&str>) -> Result<()>;
+    async fn mark_download_failed(&self, download_id: &str, last_error: Option<&str>)
+        -> Result<()>;
     async fn get_or_create_cue_sheet(&self, download_id: &str, path: &Path) -> Result<CueSheet>;
     async fn record_input_file(
         &self,
@@ -57,6 +58,8 @@ pub trait CueSplitter {
 }
 
 pub trait TrackCleanup {
-    async fn cleanup_download_tracks(&self, download: &TrackedDownload)
-    -> Result<Vec<TrackCleanupOutcome>>;
+    async fn cleanup_download_tracks(
+        &self,
+        download: &TrackedDownload,
+    ) -> Result<Vec<TrackCleanupOutcome>>;
 }

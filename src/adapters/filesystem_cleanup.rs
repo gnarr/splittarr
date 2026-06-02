@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 
 use crate::application::ports::TrackCleanup;
-use crate::domain::{CueSheet, GeneratedTrack, TrackCleanupOutcome, TrackCleanupStatus, TrackedDownload};
+use crate::domain::{
+    CueSheet, GeneratedTrack, TrackCleanupOutcome, TrackCleanupStatus, TrackedDownload,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct FilesystemTrackCleanup;

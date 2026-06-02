@@ -129,17 +129,18 @@ impl SqliteDownloadStore {
 
     fn get_tracked_download_sync(&self, download_id: &str) -> Result<Option<TrackedDownload>> {
         let conn = self.connect()?;
-        Ok(conn.query_row(
-            "SELECT download_id, title, status, output_path, tracked_download_state,
+        Ok(conn
+            .query_row(
+                "SELECT download_id, title, status, output_path, tracked_download_state,
                     lifecycle_state, created_at, updated_at, first_seen_at, last_seen_in_queue_at,
                     processing_started_at, processing_finished_at, cleanup_started_at,
                     cleanup_finished_at, completed_at, last_error
              FROM downloads
              WHERE download_id = ?",
-            [download_id],
-            |row| map_download_row(&conn, row),
-        )
-        .optional()?)
+                [download_id],
+                |row| map_download_row(&conn, row),
+            )
+            .optional()?)
     }
 
     fn upsert_tracked_download_sync(&self, download: &TrackedDownload) -> Result<()> {
@@ -437,7 +438,11 @@ impl DownloadStore for SqliteDownloadStore {
             .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
     }
 
-    async fn mark_download_failed(&self, download_id: &str, last_error: Option<&str>) -> Result<()> {
+    async fn mark_download_failed(
+        &self,
+        download_id: &str,
+        last_error: Option<&str>,
+    ) -> Result<()> {
         let store = self.clone();
         let download_id = download_id.to_owned();
         let last_error = last_error.map(str::to_owned);
@@ -519,7 +524,10 @@ impl DownloadStore for SqliteDownloadStore {
     }
 }
 
-fn map_download_row(conn: &Connection, row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackedDownload> {
+fn map_download_row(
+    conn: &Connection,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<TrackedDownload> {
     let download_id: String = row.get(0)?;
     let cue_sheets = cue_sheets_for(conn, &download_id)?;
     let generated_track_count = cue_sheets.iter().map(|cue| cue.tracks.len()).sum();
@@ -649,7 +657,10 @@ fn cue_sheet_by_download_and_path(
     .optional()
 }
 
-fn tracks_for(conn: &Connection, cue_sheet_id: &str) -> Result<Vec<GeneratedTrack>, rusqlite::Error> {
+fn tracks_for(
+    conn: &Connection,
+    cue_sheet_id: &str,
+) -> Result<Vec<GeneratedTrack>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT id, cue_file_id, download_id, path, size_bytes, cleanup_status, cleanup_message, deleted_at
          FROM tracks
@@ -735,7 +746,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         );",
     )?;
 
-    add_column_if_missing(&tx, "downloads", "lifecycle_state", "ALTER TABLE downloads ADD COLUMN lifecycle_state TEXT")?;
+    add_column_if_missing(
+        &tx,
+        "downloads",
+        "lifecycle_state",
+        "ALTER TABLE downloads ADD COLUMN lifecycle_state TEXT",
+    )?;
     add_column_if_missing(
         &tx,
         "downloads",
@@ -748,7 +764,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         "updated_at",
         "ALTER TABLE downloads ADD COLUMN updated_at TEXT NOT NULL DEFAULT '1970-01-01 00:00:00'",
     )?;
-    add_column_if_missing(&tx, "downloads", "first_seen_at", "ALTER TABLE downloads ADD COLUMN first_seen_at TEXT")?;
+    add_column_if_missing(
+        &tx,
+        "downloads",
+        "first_seen_at",
+        "ALTER TABLE downloads ADD COLUMN first_seen_at TEXT",
+    )?;
     add_column_if_missing(
         &tx,
         "downloads",
@@ -779,25 +800,60 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         "cleanup_finished_at",
         "ALTER TABLE downloads ADD COLUMN cleanup_finished_at TEXT",
     )?;
-    add_column_if_missing(&tx, "downloads", "completed_at", "ALTER TABLE downloads ADD COLUMN completed_at TEXT")?;
-    add_column_if_missing(&tx, "downloads", "last_error", "ALTER TABLE downloads ADD COLUMN last_error TEXT")?;
-    add_column_if_missing(&tx, "cue_files", "status", "ALTER TABLE cue_files ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")?;
-    add_column_if_missing(&tx, "cue_files", "message", "ALTER TABLE cue_files ADD COLUMN message TEXT")?;
+    add_column_if_missing(
+        &tx,
+        "downloads",
+        "completed_at",
+        "ALTER TABLE downloads ADD COLUMN completed_at TEXT",
+    )?;
+    add_column_if_missing(
+        &tx,
+        "downloads",
+        "last_error",
+        "ALTER TABLE downloads ADD COLUMN last_error TEXT",
+    )?;
+    add_column_if_missing(
+        &tx,
+        "cue_files",
+        "status",
+        "ALTER TABLE cue_files ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'",
+    )?;
+    add_column_if_missing(
+        &tx,
+        "cue_files",
+        "message",
+        "ALTER TABLE cue_files ADD COLUMN message TEXT",
+    )?;
     add_column_if_missing(
         &tx,
         "cue_files",
         "updated_at",
         "ALTER TABLE cue_files ADD COLUMN updated_at TEXT NOT NULL DEFAULT '1970-01-01 00:00:00'",
     )?;
-    add_column_if_missing(&tx, "tracks", "size_bytes", "ALTER TABLE tracks ADD COLUMN size_bytes INTEGER")?;
+    add_column_if_missing(
+        &tx,
+        "tracks",
+        "size_bytes",
+        "ALTER TABLE tracks ADD COLUMN size_bytes INTEGER",
+    )?;
     add_column_if_missing(
         &tx,
         "tracks",
         "cleanup_status",
         "ALTER TABLE tracks ADD COLUMN cleanup_status TEXT NOT NULL DEFAULT 'pending'",
     )?;
-    add_column_if_missing(&tx, "tracks", "cleanup_message", "ALTER TABLE tracks ADD COLUMN cleanup_message TEXT")?;
-    add_column_if_missing(&tx, "tracks", "deleted_at", "ALTER TABLE tracks ADD COLUMN deleted_at TEXT")?;
+    add_column_if_missing(
+        &tx,
+        "tracks",
+        "cleanup_message",
+        "ALTER TABLE tracks ADD COLUMN cleanup_message TEXT",
+    )?;
+    add_column_if_missing(
+        &tx,
+        "tracks",
+        "deleted_at",
+        "ALTER TABLE tracks ADD COLUMN deleted_at TEXT",
+    )?;
 
     tx.execute(
         "UPDATE downloads
@@ -871,7 +927,12 @@ fn migrate(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-fn add_column_if_missing(conn: &Connection, table: &str, column: &str, statement: &str) -> Result<()> {
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    statement: &str,
+) -> Result<()> {
     if !column_exists(conn, table, column)? {
         conn.execute(statement, [])?;
     }
@@ -897,7 +958,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::SqliteDownloadStore;
-    use crate::domain::{CueSheetStatus, DownloadLifecycleState, InputFileKind, RecordedTrack, TrackCleanupStatus, TrackedDownload};
+    use crate::domain::{
+        CueSheetStatus, DownloadLifecycleState, InputFileKind, RecordedTrack, TrackCleanupStatus,
+        TrackedDownload,
+    };
 
     #[test]
     fn repository_persists_history_and_file_snapshots() {
@@ -937,21 +1001,23 @@ mod tests {
             }],
         )
         .unwrap();
-        repo.mark_download_awaiting_import_sync("download-1").unwrap();
-        let stored = repo.get_tracked_download_sync("download-1").unwrap().unwrap();
+        repo.mark_download_awaiting_import_sync("download-1")
+            .unwrap();
+        let stored = repo
+            .get_tracked_download_sync("download-1")
+            .unwrap()
+            .unwrap();
         let track = &stored.cue_sheets[0].tracks[0];
-        repo.record_track_cleanup_sync(
-            "download-1",
-            &track.id,
-            TrackCleanupStatus::Deleted,
-            None,
-        )
-        .unwrap();
+        repo.record_track_cleanup_sync("download-1", &track.id, TrackCleanupStatus::Deleted, None)
+            .unwrap();
         repo.mark_download_completed_sync("download-1").unwrap();
 
         let downloads = repo.load_tracked_downloads_sync().unwrap();
         assert_eq!(downloads.len(), 1);
-        assert_eq!(downloads[0].lifecycle_state, DownloadLifecycleState::Completed);
+        assert_eq!(
+            downloads[0].lifecycle_state,
+            DownloadLifecycleState::Completed
+        );
         assert_eq!(downloads[0].input_files.len(), 1);
         assert_eq!(downloads[0].cue_sheets.len(), 1);
         assert_eq!(downloads[0].cue_sheets[0].tracks.len(), 1);
@@ -1001,8 +1067,14 @@ mod tests {
         let downloads = repo.load_tracked_downloads_sync().unwrap();
 
         assert_eq!(downloads.len(), 2);
-        let done = downloads.iter().find(|download| download.download_id == "done").unwrap();
-        let bad = downloads.iter().find(|download| download.download_id == "bad").unwrap();
+        let done = downloads
+            .iter()
+            .find(|download| download.download_id == "done")
+            .unwrap();
+        let bad = downloads
+            .iter()
+            .find(|download| download.download_id == "bad")
+            .unwrap();
         assert_eq!(done.lifecycle_state, DownloadLifecycleState::AwaitingImport);
         assert_eq!(bad.lifecycle_state, DownloadLifecycleState::Failed);
     }

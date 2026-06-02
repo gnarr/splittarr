@@ -81,7 +81,10 @@ where
             "Found {} records in Lidarr's download queue",
             snapshot.total_records
         );
-        println!("Fetched {} queue page(s) from Lidarr", snapshot.pages_fetched);
+        println!(
+            "Fetched {} queue page(s) from Lidarr",
+            snapshot.pages_fetched
+        );
 
         register_failed_imports(
             &self.download_store,
@@ -275,13 +278,24 @@ FILE "album.flac" WAVE
         );
 
         service.run_once().await.unwrap();
-        let after_split = store.get_tracked_download("download-1").await.unwrap().unwrap();
-        assert_eq!(after_split.lifecycle_state, DownloadLifecycleState::AwaitingImport);
+        let after_split = store
+            .get_tracked_download("download-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after_split.lifecycle_state,
+            DownloadLifecycleState::AwaitingImport
+        );
         assert_eq!(after_split.generated_track_count(), 1);
         assert_eq!(after_split.input_files.len(), 2);
 
         service.run_once().await.unwrap();
-        let completed = store.get_tracked_download("download-1").await.unwrap().unwrap();
+        let completed = store
+            .get_tracked_download("download-1")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(completed.lifecycle_state, DownloadLifecycleState::Completed);
         assert_eq!(
             completed.cue_sheets[0].tracks[0].cleanup_status,
