@@ -67,16 +67,19 @@ impl SqliteDownloadStore {
     fn load_tracked_download_summaries_sync(&self) -> Result<Vec<TrackedDownload>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
-            "SELECT download_id, title, status, output_path, tracked_download_state,
-                    lifecycle_state, created_at, updated_at, first_seen_at, last_seen_in_queue_at,
-                    processing_started_at, processing_finished_at, cleanup_started_at,
-                    cleanup_finished_at, completed_at, last_error,
-                    (SELECT COUNT(t.id)
-                     FROM cue_files c
-                     LEFT JOIN tracks t ON t.cue_file_id = c.id
-                     WHERE c.download_id = downloads.download_id) AS generated_track_count
-             FROM downloads
-             ORDER BY updated_at DESC, download_id DESC",
+            "SELECT d.download_id, d.title, d.status, d.output_path, d.tracked_download_state,
+                    d.lifecycle_state, d.created_at, d.updated_at, d.first_seen_at,
+                    d.last_seen_in_queue_at, d.processing_started_at, d.processing_finished_at,
+                    d.cleanup_started_at, d.cleanup_finished_at, d.completed_at, d.last_error,
+                    COUNT(t.id) AS generated_track_count
+             FROM downloads d
+             LEFT JOIN cue_files c ON c.download_id = d.download_id
+             LEFT JOIN tracks t ON t.cue_file_id = c.id
+             GROUP BY d.download_id, d.title, d.status, d.output_path, d.tracked_download_state,
+                      d.lifecycle_state, d.created_at, d.updated_at, d.first_seen_at,
+                      d.last_seen_in_queue_at, d.processing_started_at, d.processing_finished_at,
+                      d.cleanup_started_at, d.cleanup_finished_at, d.completed_at, d.last_error
+             ORDER BY d.updated_at DESC, d.download_id DESC",
         )?;
         let rows = stmt.query_map([], map_download_summary_row)?;
 
@@ -99,19 +102,7 @@ impl SqliteDownloadStore {
                       d.lifecycle_state, d.updated_at, d.completed_at
              ORDER BY d.updated_at DESC, d.download_id DESC",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(DownloadRow {
-                download_id: row.get(0)?,
-                title: row.get(1)?,
-                status: row.get(2)?,
-                output_path: row.get(3)?,
-                tracked_download_state: row.get(4)?,
-                lifecycle_state: DownloadLifecycleState::from_db(row.get::<_, String>(5)?.as_str()),
-                updated_at: row.get(6)?,
-                completed_at: row.get(7)?,
-                generated_track_count: row.get::<_, i64>(8)? as usize,
-            })
-        })?;
+        let rows = stmt.query_map([], map_download_history_row)?;
 
         let mut download_rows = Vec::new();
         for row in rows {
@@ -123,6 +114,32 @@ impl SqliteDownloadStore {
     pub async fn load_download_rows(&self) -> Result<Vec<DownloadRow>> {
         let store = self.clone();
         tokio::task::spawn_blocking(move || store.load_download_rows_sync())
+            .await
+            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
+
+    fn load_download_row_sync(&self, download_id: &str) -> Result<Option<DownloadRow>> {
+        let conn = self.connect()?;
+        Ok(conn
+            .query_row(
+                "SELECT d.download_id, d.title, d.status, d.output_path, d.tracked_download_state,
+                        d.lifecycle_state, d.updated_at, d.completed_at, COUNT(t.id) AS generated_track_count
+                 FROM downloads d
+                 LEFT JOIN cue_files c ON c.download_id = d.download_id
+                 LEFT JOIN tracks t ON t.cue_file_id = c.id
+                 WHERE d.download_id = ?
+                 GROUP BY d.download_id, d.title, d.status, d.output_path, d.tracked_download_state,
+                          d.lifecycle_state, d.updated_at, d.completed_at",
+                [download_id],
+                map_download_history_row,
+            )
+            .optional()?)
+    }
+
+    pub async fn load_download_row(&self, download_id: &str) -> Result<Option<DownloadRow>> {
+        let store = self.clone();
+        let download_id = download_id.to_owned();
+        tokio::task::spawn_blocking(move || store.load_download_row_sync(&download_id))
             .await
             .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
     }
@@ -195,7 +212,7 @@ impl SqliteDownloadStore {
         conn.execute(
             "UPDATE downloads
              SET lifecycle_state = 'awaiting_import',
-                 processing_finished_at = CURRENT_TIMESTAMP,
+                 processing_finished_at = COALESCE(processing_finished_at, CURRENT_TIMESTAMP),
                  last_error = NULL,
                  updated_at = CURRENT_TIMESTAMP
              WHERE download_id = ?",
@@ -329,7 +346,10 @@ impl SqliteDownloadStore {
                  VALUES (?1, ?2, ?3, ?4, ?5, 'pending', NULL, NULL)
                  ON CONFLICT(download_id, path) DO UPDATE SET
                     cue_file_id = excluded.cue_file_id,
-                    size_bytes = excluded.size_bytes",
+                    size_bytes = excluded.size_bytes,
+                    cleanup_status = excluded.cleanup_status,
+                    cleanup_message = excluded.cleanup_message,
+                    deleted_at = excluded.deleted_at",
                 params![
                     Uuid::new_v4().to_string(),
                     &track.path,
@@ -551,6 +571,20 @@ fn map_download_row(
         completed_at: row.get(14)?,
         generated_track_count,
         last_error: row.get(15)?,
+    })
+}
+
+fn map_download_history_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DownloadRow> {
+    Ok(DownloadRow {
+        download_id: row.get(0)?,
+        title: row.get(1)?,
+        status: row.get(2)?,
+        output_path: row.get(3)?,
+        tracked_download_state: row.get(4)?,
+        lifecycle_state: DownloadLifecycleState::from_db(row.get::<_, String>(5)?.as_str()),
+        updated_at: row.get(6)?,
+        completed_at: row.get(7)?,
+        generated_track_count: row.get::<_, i64>(8)? as usize,
     })
 }
 
@@ -1026,6 +1060,155 @@ mod tests {
             downloads[0].cue_sheets[0].tracks[0].cleanup_status,
             TrackCleanupStatus::Deleted
         );
+    }
+
+    #[test]
+    fn awaiting_import_preserves_first_processing_finished_timestamp() {
+        let tmp = tempdir().unwrap();
+        let repo = SqliteDownloadStore::open(tmp.path()).unwrap();
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Album".into(),
+            "completed".into(),
+            "/downloads/album".into(),
+            "importFailed".into(),
+        );
+
+        repo.upsert_tracked_download_sync(&download).unwrap();
+        repo.mark_download_awaiting_import_sync("download-1").unwrap();
+
+        let conn = Connection::open(&repo.db_path).unwrap();
+        conn.execute(
+            "UPDATE downloads
+             SET processing_finished_at = '2001-02-03 04:05:06'
+             WHERE download_id = ?",
+            ["download-1"],
+        )
+        .unwrap();
+        drop(conn);
+
+        repo.mark_download_awaiting_import_sync("download-1").unwrap();
+
+        let stored = repo
+            .get_tracked_download_sync("download-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.processing_finished_at.as_deref(),
+            Some("2001-02-03 04:05:06")
+        );
+    }
+
+    #[test]
+    fn re_recorded_track_resets_stale_cleanup_state() {
+        let tmp = tempdir().unwrap();
+        let repo = SqliteDownloadStore::open(tmp.path()).unwrap();
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Album".into(),
+            "completed".into(),
+            "/downloads/album".into(),
+            "importFailed".into(),
+        );
+
+        repo.upsert_tracked_download_sync(&download).unwrap();
+        let cue = repo
+            .get_or_create_cue_sheet_sync(
+                &download.download_id,
+                Path::new("/downloads/album/album.cue"),
+            )
+            .unwrap();
+        repo.record_cue_result_sync(
+            &cue,
+            CueSheetStatus::Split,
+            None,
+            &[RecordedTrack {
+                path: "/downloads/album/01.flac".into(),
+                size_bytes: Some(456),
+            }],
+        )
+        .unwrap();
+
+        let stored = repo
+            .get_tracked_download_sync("download-1")
+            .unwrap()
+            .unwrap();
+        let track = &stored.cue_sheets[0].tracks[0];
+        repo.record_track_cleanup_sync(
+            "download-1",
+            &track.id,
+            TrackCleanupStatus::Deleted,
+            Some("already removed"),
+        )
+        .unwrap();
+
+        repo.record_cue_result_sync(
+            &cue,
+            CueSheetStatus::Split,
+            None,
+            &[RecordedTrack {
+                path: "/downloads/album/01.flac".into(),
+                size_bytes: Some(789),
+            }],
+        )
+        .unwrap();
+
+        let refreshed = repo
+            .get_tracked_download_sync("download-1")
+            .unwrap()
+            .unwrap();
+        let track = &refreshed.cue_sheets[0].tracks[0];
+        assert_eq!(track.size_bytes, Some(789));
+        assert_eq!(track.cleanup_status, TrackCleanupStatus::Pending);
+        assert_eq!(track.cleanup_message, None);
+        assert_eq!(track.deleted_at, None);
+    }
+
+    #[test]
+    fn load_download_row_fetches_only_requested_history_row() {
+        let tmp = tempdir().unwrap();
+        let repo = SqliteDownloadStore::open(tmp.path()).unwrap();
+
+        let album = TrackedDownload::pending(
+            "download-1".into(),
+            "Album".into(),
+            "completed".into(),
+            "/downloads/album".into(),
+            "importFailed".into(),
+        );
+        let single = TrackedDownload::pending(
+            "download-2".into(),
+            "Single".into(),
+            "completed".into(),
+            "/downloads/single".into(),
+            "importFailed".into(),
+        );
+
+        repo.upsert_tracked_download_sync(&album).unwrap();
+        repo.upsert_tracked_download_sync(&single).unwrap();
+
+        let cue = repo
+            .get_or_create_cue_sheet_sync(
+                &album.download_id,
+                Path::new("/downloads/album/album.cue"),
+            )
+            .unwrap();
+        repo.record_cue_result_sync(
+            &cue,
+            CueSheetStatus::Split,
+            None,
+            &[RecordedTrack {
+                path: "/downloads/album/01.flac".into(),
+                size_bytes: Some(456),
+            }],
+        )
+        .unwrap();
+
+        let row = repo.load_download_row_sync("download-1").unwrap().unwrap();
+        assert_eq!(row.download_id, "download-1");
+        assert_eq!(row.title, "Album");
+        assert_eq!(row.generated_track_count, 1);
+        assert_eq!(repo.load_download_row_sync("missing").unwrap(), None);
     }
 
     #[test]

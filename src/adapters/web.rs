@@ -83,14 +83,9 @@ async fn download_row_route(
     State(state): State<WebState>,
     Path(download_id): Path<String>,
 ) -> impl IntoResponse {
-    match state.store.load_download_rows().await {
-        Ok(downloads) => downloads
-            .into_iter()
-            .find(|download| download.download_id == download_id)
-            .map_or_else(
-                || (StatusCode::NOT_FOUND, "download not found").into_response(),
-                |download| download_row(&download).into_response(),
-            ),
+    match state.store.load_download_row(&download_id).await {
+        Ok(Some(download)) => download_row(&download).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "download not found").into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to load download row: {error}"),
