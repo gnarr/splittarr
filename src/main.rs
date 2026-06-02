@@ -46,11 +46,39 @@ async fn main() -> Result<()> {
 
     println!("Web UI listening on http://{}", settings.server.bind_address);
 
-    tokio::spawn(async move {
-        if let Err(err) = service.run().await {
-            eprintln!("monitor exited: {err:#}");
-        }
-    });
+    spawn_monitor_thread(service).context("start monitor thread")?;
 
     axum::serve(listener, app).await.context("run web server")
+}
+
+fn spawn_monitor_thread<Q, S, C, P, X>(service: MonitorService<Q, S, C, P, X>) -> Result<()>
+where
+    Q: crate::application::ports::QueueSource + Send + 'static,
+    S: crate::application::ports::DownloadStore + Send + Sync + 'static,
+    C: crate::application::ports::CueScanner + Send + Sync + 'static,
+    P: crate::application::ports::CueSplitter + Send + Sync + 'static,
+    X: crate::application::ports::TrackCleanup + Send + Sync + 'static,
+{
+    std::thread::Builder::new()
+        .name("splittarr-monitor".into())
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(err) => {
+                    eprintln!("failed to create monitor runtime: {err:#}");
+                    return;
+                }
+            };
+
+            runtime.block_on(async move {
+                if let Err(err) = service.run().await {
+                    eprintln!("monitor exited: {err:#}");
+                }
+            });
+        })
+        .map(|_| ())
+        .map_err(Into::into)
 }
