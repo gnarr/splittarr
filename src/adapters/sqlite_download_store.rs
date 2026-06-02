@@ -1,8 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use rusqlite::{named_params, params, Connection, OptionalExtension};
+use rusqlite::{named_params, params, params_from_iter, Connection, OptionalExtension};
 use uuid::Uuid;
 
 use crate::application::ports::DownloadStore;
@@ -29,19 +30,21 @@ pub struct DownloadRow {
     pub generated_track_count: usize,
 }
 
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl SqliteDownloadStore {
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self> {
         fs::create_dir_all(data_dir.as_ref())?;
         let db_path = data_dir.as_ref().join("data.db");
         let mut conn = Connection::open(&db_path)?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
+        configure_connection(&conn)?;
         migrate(&mut conn)?;
         Ok(Self { db_path })
     }
 
     fn connect(&self) -> Result<Connection> {
         let conn = Connection::open(&self.db_path)?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
+        configure_connection(&conn)?;
         Ok(conn)
     }
 
@@ -158,6 +161,45 @@ impl SqliteDownloadStore {
                 |row| map_download_row(&conn, row),
             )
             .optional()?)
+    }
+
+    fn get_tracked_downloads_sync(&self, download_ids: &[String]) -> Result<Vec<TrackedDownload>> {
+        use std::collections::HashMap;
+
+        if download_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.connect()?;
+        let placeholders = std::iter::repeat_n("?", download_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!(
+            "SELECT download_id, title, status, output_path, tracked_download_state,
+                    lifecycle_state, created_at, updated_at, first_seen_at, last_seen_in_queue_at,
+                    processing_started_at, processing_finished_at, cleanup_started_at,
+                    cleanup_finished_at, completed_at, last_error
+             FROM downloads
+             WHERE download_id IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&query)?;
+        let rows = stmt.query_map(params_from_iter(download_ids.iter()), |row| {
+            map_download_row(&conn, row)
+        })?;
+
+        let mut by_id = HashMap::new();
+        for row in rows {
+            let download = row?;
+            by_id.insert(download.download_id.clone(), download);
+        }
+
+        let mut downloads = Vec::new();
+        for download_id in download_ids {
+            if let Some(download) = by_id.remove(download_id) {
+                downloads.push(download);
+            }
+        }
+        Ok(downloads)
     }
 
     fn upsert_tracked_download_sync(&self, download: &TrackedDownload) -> Result<()> {
@@ -414,6 +456,14 @@ impl DownloadStore for SqliteDownloadStore {
         let store = self.clone();
         let download_id = download_id.to_owned();
         tokio::task::spawn_blocking(move || store.get_tracked_download_sync(&download_id))
+            .await
+            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
+
+    async fn get_tracked_downloads(&self, download_ids: &[String]) -> Result<Vec<TrackedDownload>> {
+        let store = self.clone();
+        let download_ids = download_ids.to_vec();
+        tokio::task::spawn_blocking(move || store.get_tracked_downloads_sync(&download_ids))
             .await
             .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
     }
@@ -973,6 +1023,12 @@ fn add_column_if_missing(
     Ok(())
 }
 
+fn configure_connection(conn: &Connection) -> Result<()> {
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
+    Ok(())
+}
+
 fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -1209,6 +1265,55 @@ mod tests {
         assert_eq!(row.title, "Album");
         assert_eq!(row.generated_track_count, 1);
         assert_eq!(repo.load_download_row_sync("missing").unwrap(), None);
+    }
+
+    #[test]
+    fn bulk_get_tracked_downloads_preserves_requested_order() {
+        let tmp = tempdir().unwrap();
+        let repo = SqliteDownloadStore::open(tmp.path()).unwrap();
+
+        let first = TrackedDownload::pending(
+            "download-1".into(),
+            "First".into(),
+            "completed".into(),
+            "/downloads/first".into(),
+            "importFailed".into(),
+        );
+        let second = TrackedDownload::pending(
+            "download-2".into(),
+            "Second".into(),
+            "completed".into(),
+            "/downloads/second".into(),
+            "importFailed".into(),
+        );
+
+        repo.upsert_tracked_download_sync(&first).unwrap();
+        repo.upsert_tracked_download_sync(&second).unwrap();
+
+        let downloads = repo
+            .get_tracked_downloads_sync(&[
+                "download-2".to_string(),
+                "missing".to_string(),
+                "download-1".to_string(),
+            ])
+            .unwrap();
+
+        assert_eq!(downloads.len(), 2);
+        assert_eq!(downloads[0].download_id, "download-2");
+        assert_eq!(downloads[1].download_id, "download-1");
+    }
+
+    #[test]
+    fn connections_set_busy_timeout() {
+        let tmp = tempdir().unwrap();
+        let repo = SqliteDownloadStore::open(tmp.path()).unwrap();
+
+        let conn = repo.connect().unwrap();
+        let busy_timeout_ms = conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+
+        assert_eq!(busy_timeout_ms, super::SQLITE_BUSY_TIMEOUT.as_millis() as i64);
     }
 
     #[test]
