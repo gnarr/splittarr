@@ -72,7 +72,7 @@ impl SqliteDownloadStore {
 
     fn get_tracked_download_sync(&self, download_id: &str) -> Result<Option<TrackedDownload>> {
         let conn = self.connect()?;
-        conn.query_row(
+        Ok(conn.query_row(
             "SELECT download_id, title, status, output_path, tracked_download_state,
                     lifecycle_state, created_at, updated_at, first_seen_at, last_seen_in_queue_at,
                     processing_started_at, processing_finished_at, cleanup_started_at,
@@ -82,8 +82,7 @@ impl SqliteDownloadStore {
             [download_id],
             |row| map_download_row(&conn, row),
         )
-        .optional()
-        .map_err(Into::into)
+        .optional()?)
     }
 
     fn upsert_tracked_download_sync(&self, download: &TrackedDownload) -> Result<()> {
@@ -115,18 +114,6 @@ impl SqliteDownloadStore {
                 ":lifecycle_state": download.lifecycle_state.as_str(),
                 ":last_error": &download.last_error,
             },
-        )?;
-        Ok(())
-    }
-
-    fn touch_download_queue_presence_sync(&self, download_id: &str) -> Result<()> {
-        let conn = self.connect()?;
-        conn.execute(
-            "UPDATE downloads
-             SET last_seen_in_queue_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE download_id = ?",
-            [download_id],
         )?;
         Ok(())
     }
@@ -357,14 +344,6 @@ impl DownloadStore for SqliteDownloadStore {
         let store = self.clone();
         let download = download.clone();
         tokio::task::spawn_blocking(move || store.upsert_tracked_download_sync(&download))
-            .await
-            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
-    }
-
-    async fn touch_download_queue_presence(&self, download_id: &str) -> Result<()> {
-        let store = self.clone();
-        let download_id = download_id.to_owned();
-        tokio::task::spawn_blocking(move || store.touch_download_queue_presence_sync(&download_id))
             .await
             .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
     }
@@ -607,7 +586,6 @@ fn cue_sheet_by_download_and_path(
         },
     )
     .optional()
-    .map_err(Into::into)
 }
 
 fn tracks_for(conn: &Connection, cue_sheet_id: &str) -> Result<Vec<GeneratedTrack>, rusqlite::Error> {
