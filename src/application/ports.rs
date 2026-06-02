@@ -56,6 +56,22 @@ pub trait DownloadStore {
         status: TrackCleanupStatus,
         message: Option<&str>,
     ) -> Result<()>;
+    async fn record_track_cleanups(
+        &self,
+        download_id: &str,
+        outcomes: &[TrackCleanupOutcome],
+    ) -> Result<()> {
+        for outcome in outcomes {
+            self.record_track_cleanup(
+                download_id,
+                &outcome.track_id,
+                outcome.status,
+                outcome.message.as_deref(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
 }
 
 pub trait CueScanner {

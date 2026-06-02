@@ -62,8 +62,7 @@ where
     let mut scan = scanner.find_cue_sheets(&scan_root).await?;
 
     if output_path.is_file() {
-        scan.cue_files
-            .retain(|cue_path| cue_references_audio_file(cue_path, &output_path));
+        scan.cue_files = filter_cue_files_for_audio(scan.cue_files, output_path.clone()).await?;
     }
 
     for error in &scan.errors {
@@ -267,6 +266,20 @@ fn cue_references_audio_file(cue_path: &Path, audio_path: &Path) -> bool {
         .iter()
         .map(|file| cue_dir.join(&file.file))
         .any(|candidate| candidate == audio_path)
+}
+
+async fn filter_cue_files_for_audio(
+    cue_files: Vec<PathBuf>,
+    audio_path: PathBuf,
+) -> Result<Vec<PathBuf>> {
+    task::spawn_blocking(move || {
+        Ok(cue_files
+            .into_iter()
+            .filter(|cue_path| cue_references_audio_file(cue_path, &audio_path))
+            .collect())
+    })
+    .await
+    .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
 }
 
 #[cfg(test)]
