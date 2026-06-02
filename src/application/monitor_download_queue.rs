@@ -31,7 +31,7 @@ mod tests {
     #[test]
     fn classifies_downloads_by_queue_presence_and_split_state() {
         let snapshot = QueueSnapshot {
-            total_records: 2,
+            total_records: 3,
             pages_fetched: 1,
             active_download_ids: HashSet::from([
                 "in-queue".to_owned(),
