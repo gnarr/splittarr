@@ -50,10 +50,7 @@ Album/
 
 Lidarr can then import the generated tracks. Once Lidarr no longer reports the download in its queue, Splittarr deletes the generated split files so the download directory is cleaned up while keeping the full history in its database and UI.
 
-## Web UI
-
-Splittarr serves a built-in monitoring UI. By default it listens on `0.0.0.0:9899`.
-
+Splittarr serves a built-in monitoring UI. By default it listens on `127.0.0.1:9899`.
 The UI includes:
 
 - a download history page at `/`
