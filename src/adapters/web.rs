@@ -7,7 +7,7 @@ use axum::{
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 
-use crate::adapters::sqlite_download_store::SqliteDownloadStore;
+use crate::adapters::sqlite_download_store::{DownloadRow, SqliteDownloadStore};
 use crate::application::ports::DownloadStore;
 use crate::domain::{
     CueSheet, CueSheetStatus, DownloadLifecycleState, GeneratedTrack, InputFile, InputFileKind,
@@ -26,6 +26,7 @@ pub fn router(store: SqliteDownloadStore) -> Router {
         .route("/downloads/{download_id}", get(download_detail))
         .route("/downloads/{download_id}/content", get(download_detail_content))
         .route("/downloads/{download_id}/row", get(download_row_route))
+        .route("/downloads/rows", get(download_rows_route))
         .with_state(WebState { store })
 }
 
@@ -34,7 +35,7 @@ async fn healthz() -> impl IntoResponse {
 }
 
 async fn index(State(state): State<WebState>) -> Response {
-    match state.store.load_tracked_downloads().await {
+    match state.store.load_download_rows().await {
         Ok(downloads) => Html(page(
             "Splittarr",
             html! {
@@ -79,12 +80,28 @@ async fn download_row_route(
     State(state): State<WebState>,
     Path(download_id): Path<String>,
 ) -> impl IntoResponse {
-    match state.store.get_tracked_download(&download_id).await {
-        Ok(Some(download)) => download_row(&download).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "download not found").into_response(),
+    match state.store.load_download_rows().await {
+        Ok(downloads) => downloads
+            .into_iter()
+            .find(|download| download.download_id == download_id)
+            .map_or_else(
+                || (StatusCode::NOT_FOUND, "download not found").into_response(),
+                |download| download_row(&download).into_response(),
+            ),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to load download row: {error}"),
+        )
+            .into_response(),
+    }
+}
+
+async fn download_rows_route(State(state): State<WebState>) -> impl IntoResponse {
+    match state.store.load_download_rows().await {
+        Ok(downloads) => download_rows(&downloads).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to load download rows: {error}"),
         )
             .into_response(),
     }
@@ -145,7 +162,7 @@ fn page(title: &str, body: Markup) -> String {
     .into_string()
 }
 
-fn download_row(download: &TrackedDownload) -> Markup {
+fn download_row(download: &DownloadRow) -> Markup {
     html! {
         tr id=(format!("download-row-{}", download.download_id)) data-download-id=(&download.download_id) {
             td {
@@ -156,9 +173,17 @@ fn download_row(download: &TrackedDownload) -> Markup {
             td { span class=(lifecycle_class(&download.lifecycle_state)) { (download.lifecycle_state.as_str()) } }
             td { (&download.status) " / " (&download.tracked_download_state) }
             td class="path" { (&download.output_path) }
-            td { (download.generated_track_count()) }
+            td { (download.generated_track_count) }
             td { (&download.updated_at) }
             td { (download.completed_at.as_deref().unwrap_or("-")) }
+        }
+    }
+}
+
+fn download_rows(downloads: &[DownloadRow]) -> Markup {
+    html! {
+        @for download in downloads {
+            (download_row(download))
         }
     }
 }
@@ -343,16 +368,18 @@ fn format_size(size: Option<i64>) -> String {
 const HISTORY_SCRIPT: &str = r#"
 const rows = document.getElementById("downloads-rows");
 if (rows) {
+  const table = document.getElementById("downloads-table");
+  const empty = document.getElementById("downloads-empty");
   const refreshRows = async () => {
-    const currentRows = [...rows.querySelectorAll("tr[data-download-id]")];
-    await Promise.all(currentRows.map(async (row) => {
-      const id = row.dataset.downloadId;
-      if (!id) return;
-      const response = await fetch(`/downloads/${id}/row`, { headers: { "x-requested-with": "fetch" } });
-      if (!response.ok) return;
-      row.outerHTML = await response.text();
-    }));
+    const response = await fetch("/downloads/rows", { headers: { "x-requested-with": "fetch" } });
+    if (!response.ok) return;
+    const body = await response.text();
+    rows.innerHTML = body;
+    const hasRows = body.trim().length > 0;
+    if (table) table.hidden = !hasRows;
+    if (empty) empty.hidden = hasRows;
   };
+  refreshRows();
   setInterval(refreshRows, 10000);
 }
 "#;
@@ -559,5 +586,31 @@ mod tests {
         assert!(rendered.contains("Input Files"));
         assert!(rendered.contains("/downloads/album/album.cue"));
         assert!(rendered.contains("/downloads/album/01.flac"));
+    }
+
+    #[tokio::test]
+    async fn rows_endpoint_renders_all_rows_in_one_response() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SqliteDownloadStore::open(tmp.path()).unwrap();
+        let download = TrackedDownload::pending(
+            "abc".into(),
+            "Album".into(),
+            "completed".into(),
+            "/downloads/album".into(),
+            "importFailed".into(),
+        );
+        store.upsert_tracked_download(&download).await.unwrap();
+
+        let app = router(store);
+        let response = app
+            .oneshot(Request::builder().uri("/downloads/rows").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let rendered = String::from_utf8(body.to_vec()).unwrap();
+
+        assert!(rendered.contains("download-row-abc"));
+        assert!(rendered.contains("/downloads/abc"));
+        assert!(rendered.contains("0"));
     }
 }

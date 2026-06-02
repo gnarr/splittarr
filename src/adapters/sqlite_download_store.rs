@@ -16,6 +16,19 @@ pub struct SqliteDownloadStore {
     db_path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadRow {
+    pub download_id: String,
+    pub title: String,
+    pub status: String,
+    pub output_path: String,
+    pub tracked_download_state: String,
+    pub lifecycle_state: DownloadLifecycleState,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+    pub generated_track_count: usize,
+}
+
 impl SqliteDownloadStore {
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self> {
         fs::create_dir_all(data_dir.as_ref())?;
@@ -68,6 +81,46 @@ impl SqliteDownloadStore {
             downloads.push(row?);
         }
         Ok(downloads)
+    }
+
+    fn load_download_rows_sync(&self) -> Result<Vec<DownloadRow>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT d.download_id, d.title, d.status, d.output_path, d.tracked_download_state,
+                    d.lifecycle_state, d.updated_at, d.completed_at, COUNT(t.id) AS generated_track_count
+             FROM downloads d
+             LEFT JOIN cue_files c ON c.download_id = d.download_id
+             LEFT JOIN tracks t ON t.cue_file_id = c.id
+             GROUP BY d.download_id, d.title, d.status, d.output_path, d.tracked_download_state,
+                      d.lifecycle_state, d.updated_at, d.completed_at
+             ORDER BY d.updated_at DESC, d.download_id DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(DownloadRow {
+                download_id: row.get(0)?,
+                title: row.get(1)?,
+                status: row.get(2)?,
+                output_path: row.get(3)?,
+                tracked_download_state: row.get(4)?,
+                lifecycle_state: DownloadLifecycleState::from_db(row.get::<_, String>(5)?.as_str()),
+                updated_at: row.get(6)?,
+                completed_at: row.get(7)?,
+                generated_track_count: row.get::<_, i64>(8)? as usize,
+            })
+        })?;
+
+        let mut download_rows = Vec::new();
+        for row in rows {
+            download_rows.push(row?);
+        }
+        Ok(download_rows)
+    }
+
+    pub async fn load_download_rows(&self) -> Result<Vec<DownloadRow>> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.load_download_rows_sync())
+            .await
+            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
     }
 
     fn get_tracked_download_sync(&self, download_id: &str) -> Result<Option<TrackedDownload>> {
