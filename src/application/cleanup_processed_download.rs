@@ -12,10 +12,17 @@ pub async fn cleanup_processed_download<S: DownloadStore, C: TrackCleanup>(
         .mark_download_cleanup_started(&download.download_id)
         .await
         .with_context(|| format!("mark cleanup started for {}", download.title))?;
-    let outcomes = cleanup
-        .cleanup_download_tracks(download)
-        .await
-        .with_context(|| format!("cleanup failed for {}", download.title))?;
+    let outcomes = match cleanup.cleanup_download_tracks(download).await {
+        Ok(outcomes) => outcomes,
+        Err(err) => {
+            let message = format!("cleanup failed for {}: {err}", download.title);
+            store
+                .mark_download_failed(&download.download_id, Some(&message))
+                .await
+                .context("mark download failed after cleanup error")?;
+            return Err(err).with_context(|| format!("cleanup failed for {}", download.title));
+        }
+    };
 
     let mut failures = Vec::new();
     for outcome in &outcomes {
@@ -163,6 +170,17 @@ mod tests {
         }
     }
 
+    struct FailingCleanup;
+
+    impl TrackCleanup for FailingCleanup {
+        async fn cleanup_download_tracks(
+            &self,
+            _download: &TrackedDownload,
+        ) -> Result<Vec<TrackCleanupOutcome>> {
+            anyhow::bail!("filesystem unavailable");
+        }
+    }
+
     #[tokio::test]
     async fn delete_failed_without_message_marks_download_failed() {
         let store = FakeStore::default();
@@ -197,6 +215,44 @@ mod tests {
         assert_eq!(
             store.last_error.lock().unwrap().as_deref(),
             Some("track cleanup failed: track-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_error_marks_download_failed() {
+        let store = FakeStore::default();
+        let cleanup = FailingCleanup;
+        let download = TrackedDownload {
+            download_id: "download-1".into(),
+            title: "Album".into(),
+            status: "completed".into(),
+            output_path: "/downloads/album".into(),
+            tracked_download_state: "importFailed".into(),
+            lifecycle_state: DownloadLifecycleState::AwaitingImport,
+            created_at: String::new(),
+            updated_at: String::new(),
+            first_seen_at: None,
+            last_seen_in_queue_at: None,
+            processing_started_at: None,
+            processing_finished_at: None,
+            cleanup_started_at: None,
+            cleanup_finished_at: None,
+            completed_at: None,
+            input_files: Vec::new(),
+            cue_sheets: Vec::new(),
+            generated_track_count: 0,
+            last_error: None,
+        };
+
+        let err = cleanup_processed_download(&store, &cleanup, &download)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("cleanup failed for Album"));
+        assert!(store.states.lock().unwrap().contains(&"failed".to_string()));
+        assert_eq!(
+            store.last_error.lock().unwrap().as_deref(),
+            Some("cleanup failed for Album: filesystem unavailable")
         );
     }
 }
