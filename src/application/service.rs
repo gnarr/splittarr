@@ -153,8 +153,7 @@ mod tests {
         CueScanner, CueSplitter, DownloadStore, QueueSource, TrackCleanup,
     };
     use crate::domain::{
-        DiscoveredCueSheets, DownloadLifecycleState, FailedImportCandidate, QueueSnapshot,
-        RecordedTrack, SplitOutcome, SplitStatus, TrackCleanupOutcome, TrackCleanupStatus,
+        DiscoveredCueSheets, DownloadLifecycleState, FailedImportCandidate, QueueSnapshot, SplitOutcome, SplitStatus, TrackCleanupOutcome, TrackCleanupStatus,
     };
 
     struct FakeQueue {
