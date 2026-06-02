@@ -17,6 +17,15 @@ pub trait DownloadStore {
         self.load_tracked_downloads().await
     }
     async fn get_tracked_download(&self, download_id: &str) -> Result<Option<TrackedDownload>>;
+    async fn get_tracked_downloads(&self, download_ids: &[String]) -> Result<Vec<TrackedDownload>> {
+        let mut downloads = Vec::new();
+        for download_id in download_ids {
+            if let Some(download) = self.get_tracked_download(download_id).await? {
+                downloads.push(download);
+            }
+        }
+        Ok(downloads)
+    }
     async fn upsert_tracked_download(&self, download: &TrackedDownload) -> Result<()>;
     async fn mark_download_processing(&self, download_id: &str) -> Result<()>;
     async fn mark_download_awaiting_import(&self, download_id: &str) -> Result<()>;

@@ -94,16 +94,14 @@ where
         .await?;
 
         let (to_process, to_cleanup_candidates) = classify_downloads(downloads, &snapshot);
-        let mut to_cleanup = Vec::new();
-        for download in to_cleanup_candidates {
-            if let Some(full_download) = self
-                .download_store
-                .get_tracked_download(&download.download_id)
-                .await?
-            {
-                to_cleanup.push(full_download);
-            }
-        }
+        let to_cleanup_ids = to_cleanup_candidates
+            .into_iter()
+            .map(|download| download.download_id)
+            .collect::<Vec<_>>();
+        let to_cleanup = self
+            .download_store
+            .get_tracked_downloads(&to_cleanup_ids)
+            .await?;
 
         println!("{} downloads to be processed", to_process.len());
 
