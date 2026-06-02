@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use rcue::parser::parse_from_file;
+use tokio::task;
 
 use crate::application::ports::{CueScanner, CueSplitter, DownloadStore};
 use crate::domain::{
@@ -151,16 +152,50 @@ async fn snapshot_input_files<S: DownloadStore>(
     cue_sheet: &CueSheet,
     cue_path: &Path,
 ) -> Result<()> {
+    let snapshot = snapshot_input_file_details(cue_path.to_path_buf()).await?;
     store
         .record_input_file(
             download_id,
             Some(&cue_sheet.id),
             cue_path,
             InputFileKind::Cue,
-            file_size(cue_path),
+            snapshot.cue_size_bytes,
         )
         .await?;
 
+    for input in snapshot.audio_inputs {
+        store
+            .record_input_file(
+                download_id,
+                Some(&cue_sheet.id),
+                &input.path,
+                InputFileKind::Audio,
+                input.size_bytes,
+            )
+            .await?;
+    }
+
+    Ok(())
+}
+
+struct SnapshotInputDetails {
+    cue_size_bytes: Option<i64>,
+    audio_inputs: Vec<SnapshotAudioInput>,
+}
+
+struct SnapshotAudioInput {
+    path: PathBuf,
+    size_bytes: Option<i64>,
+}
+
+async fn snapshot_input_file_details(cue_path: PathBuf) -> Result<SnapshotInputDetails> {
+    task::spawn_blocking(move || snapshot_input_file_details_sync(&cue_path))
+        .await
+        .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+}
+
+fn snapshot_input_file_details_sync(cue_path: &Path) -> Result<SnapshotInputDetails> {
+    let cue_size_bytes = file_size(cue_path);
     let cue_path_str = cue_path.to_string_lossy();
     let cue = match parse_from_file(&cue_path_str, false) {
         Ok(cue) => cue,
@@ -169,26 +204,29 @@ async fn snapshot_input_files<S: DownloadStore>(
                 "Unable to parse cue file for input snapshot {}: {err}",
                 cue_path.display()
             );
-            return Ok(());
+            return Ok(SnapshotInputDetails {
+                cue_size_bytes,
+                audio_inputs: Vec::new(),
+            });
         }
     };
     let cue_dir = cue_path.parent().unwrap_or_else(|| Path::new("."));
+    let audio_inputs = cue
+        .files
+        .iter()
+        .map(|file| cue_dir.join(&file.file))
+        .filter_map(|path| {
+            path.exists().then(|| SnapshotAudioInput {
+                size_bytes: file_size(&path),
+                path,
+            })
+        })
+        .collect();
 
-    for input in cue.files.iter().map(|file| cue_dir.join(&file.file)) {
-        if input.exists() {
-            store
-                .record_input_file(
-                    download_id,
-                    Some(&cue_sheet.id),
-                    &input,
-                    InputFileKind::Audio,
-                    file_size(&input),
-                )
-                .await?;
-        }
-    }
-
-    Ok(())
+    Ok(SnapshotInputDetails {
+        cue_size_bytes,
+        audio_inputs,
+    })
 }
 
 fn file_size(path: &Path) -> Option<i64> {
@@ -252,6 +290,7 @@ mod tests {
         states: Mutex<Vec<String>>,
         last_error: Mutex<Option<String>>,
         recorded_cues: Mutex<Vec<String>>,
+        recorded_input_files: Mutex<Vec<(String, InputFileKind)>>,
         recorded_tracks: Mutex<Vec<String>>,
     }
 
@@ -323,10 +362,14 @@ mod tests {
             &self,
             _download_id: &str,
             _cue_sheet_id: Option<&str>,
-            _path: &Path,
-            _kind: InputFileKind,
+            path: &Path,
+            kind: InputFileKind,
             _size_bytes: Option<i64>,
         ) -> Result<()> {
+            self.recorded_input_files
+                .lock()
+                .unwrap()
+                .push((path.to_string_lossy().to_string(), kind));
             Ok(())
         }
 
@@ -531,5 +574,43 @@ mod tests {
 
         assert!(cue_references_audio_file(&target_cue, &target_audio));
         assert!(!cue_references_audio_file(&target_cue, &other_audio));
+    }
+
+    #[tokio::test]
+    async fn invalid_cue_snapshot_records_cue_file_and_continues_processing() {
+        let tmp = tempdir().unwrap();
+        let cue_path = tmp.path().join("broken.cue");
+        fs::write(&cue_path, "this is not a valid cue sheet").unwrap();
+
+        let store = FakeStore::default();
+        let scanner = FakeScanner {
+            roots: Mutex::new(Vec::new()),
+            cue_files: vec![cue_path.clone()],
+        };
+        let splitter = FakeSplitter {
+            calls: Mutex::new(Vec::new()),
+        };
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Broken".into(),
+            "completed".into(),
+            tmp.path().to_string_lossy().to_string(),
+            "importFailed".into(),
+        );
+
+        process_tracked_download(&store, &scanner, &splitter, download)
+            .await
+            .unwrap();
+
+        assert_eq!(splitter.calls.lock().unwrap().as_slice(), &[cue_path.clone()]);
+        assert_eq!(
+            store.recorded_input_files.lock().unwrap().as_slice(),
+            &[(cue_path.to_string_lossy().to_string(), InputFileKind::Cue)]
+        );
+        assert!(store
+            .states
+            .lock()
+            .unwrap()
+            .contains(&"awaiting_import".to_string()));
     }
 }
