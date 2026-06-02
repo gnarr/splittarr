@@ -88,7 +88,7 @@ services:
       # Optional, defaults shown:
       SPLITTARR_DATA_DIR: /config
       SPLITTARR_CHECK_FREQUENCY_SECONDS: 60
-      SPLITTARR_SERVER__BIND_ADDRESS: 0.0.0.0:9899
+      SPLITTARR_SERVER__BIND_ADDRESS: 127.0.0.1:9899
       SPLITTARR_CUE__STRICT: "false"
       SPLITTARR_SHNSPLIT__PATH: shnsplit
       SPLITTARR_SHNSPLIT__OVERWRITE: "true"
@@ -129,7 +129,7 @@ data_dir = "/config"
 check_frequency_seconds = 60
 
 [server]
-bind_address = "0.0.0.0:9899"
+bind_address = "127.0.0.1:9899"
 
 [lidarr]
 url = "http://lidarr:8686"
@@ -164,7 +164,7 @@ Nested configuration keys use a double underscore.
 export SPLITTARR_LIDARR__URL=http://lidarr:8686
 export SPLITTARR_LIDARR__API_KEY=your-lidarr-api-key
 export SPLITTARR_CHECK_FREQUENCY_SECONDS=60
-export SPLITTARR_SERVER__BIND_ADDRESS=0.0.0.0:9899
+export SPLITTARR_SERVER__BIND_ADDRESS=127.0.0.1:9899
 export SPLITTARR_SHNSPLIT__FORMAT="%p - %a - %n - %t"
 
 splittarr
@@ -176,7 +176,7 @@ splittarr
 | ------------------------- | ----------------------------------- | -------------------------------------- | ---------------------------------------------------------- |
 | `data_dir`                | `SPLITTARR_DATA_DIR`                | platform data dir, `/config` in Docker | Directory used for Splittarr's SQLite database.            |
 | `check_frequency_seconds` | `SPLITTARR_CHECK_FREQUENCY_SECONDS` | `60`                                   | How often Splittarr polls Lidarr's queue.                  |
-| `server.bind_address`     | `SPLITTARR_SERVER__BIND_ADDRESS`    | `0.0.0.0:9899`                         | Address for the built-in web UI and health endpoint.       |
+| `server.bind_address`     | `SPLITTARR_SERVER__BIND_ADDRESS`    | `127.0.0.1:9899`                       | Address for the built-in web UI and health endpoint.       |
 | `lidarr.url`              | `SPLITTARR_LIDARR__URL`             | required                               | Base URL for Lidarr, for example `http://lidarr:8686`.     |
 | `lidarr.api_key`          | `SPLITTARR_LIDARR__API_KEY`         | required                               | Lidarr API key.                                            |
 | `cue.strict`              | `SPLITTARR_CUE__STRICT`             | `false`                                | Whether CUE parsing should run in strict mode.             |
