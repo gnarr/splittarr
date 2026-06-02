@@ -70,7 +70,11 @@ impl SqliteDownloadStore {
             "SELECT download_id, title, status, output_path, tracked_download_state,
                     lifecycle_state, created_at, updated_at, first_seen_at, last_seen_in_queue_at,
                     processing_started_at, processing_finished_at, cleanup_started_at,
-                    cleanup_finished_at, completed_at, last_error
+                    cleanup_finished_at, completed_at, last_error,
+                    (SELECT COUNT(t.id)
+                     FROM cue_files c
+                     LEFT JOIN tracks t ON t.cue_file_id = c.id
+                     WHERE c.download_id = downloads.download_id) AS generated_track_count
              FROM downloads
              ORDER BY updated_at DESC, download_id DESC",
         )?;
@@ -517,9 +521,11 @@ impl DownloadStore for SqliteDownloadStore {
 
 fn map_download_row(conn: &Connection, row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackedDownload> {
     let download_id: String = row.get(0)?;
+    let cue_sheets = cue_sheets_for(conn, &download_id)?;
+    let generated_track_count = cue_sheets.iter().map(|cue| cue.tracks.len()).sum();
     Ok(TrackedDownload {
         input_files: input_files_for(conn, &download_id)?,
-        cue_sheets: cue_sheets_for(conn, &download_id)?,
+        cue_sheets,
         download_id,
         title: row.get(1)?,
         status: row.get(2)?,
@@ -535,6 +541,7 @@ fn map_download_row(conn: &Connection, row: &rusqlite::Row<'_>) -> rusqlite::Res
         cleanup_started_at: row.get(12)?,
         cleanup_finished_at: row.get(13)?,
         completed_at: row.get(14)?,
+        generated_track_count,
         last_error: row.get(15)?,
     })
 }
@@ -558,6 +565,7 @@ fn map_download_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tracked
         cleanup_started_at: row.get(12)?,
         cleanup_finished_at: row.get(13)?,
         completed_at: row.get(14)?,
+        generated_track_count: row.get::<_, i64>(16)? as usize,
         last_error: row.get(15)?,
     })
 }

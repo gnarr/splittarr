@@ -19,6 +19,7 @@ pub struct TrackedDownload {
     pub completed_at: Option<String>,
     pub input_files: Vec<InputFile>,
     pub cue_sheets: Vec<CueSheet>,
+    pub generated_track_count: usize,
     pub last_error: Option<String>,
 }
 
@@ -48,12 +49,17 @@ impl TrackedDownload {
             completed_at: None,
             input_files: Vec::new(),
             cue_sheets: Vec::new(),
+            generated_track_count: 0,
             last_error: None,
         }
     }
 
     pub fn generated_track_count(&self) -> usize {
-        self.cue_sheets.iter().map(|cue| cue.tracks.len()).sum()
+        if self.generated_track_count == 0 {
+            self.cue_sheets.iter().map(|cue| cue.tracks.len()).sum()
+        } else {
+            self.generated_track_count
+        }
     }
 
     pub fn has_generated_tracks(&self) -> bool {

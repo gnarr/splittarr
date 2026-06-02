@@ -12,7 +12,7 @@ pub fn classify_downloads(
             if download.lifecycle_state.is_ready_for_processing() {
                 to_process.push(download);
             }
-        } else if !download.lifecycle_state.is_terminal() {
+        } else if !download.lifecycle_state.is_terminal() && download.has_generated_tracks() {
             to_cleanup.push(download);
         }
     }

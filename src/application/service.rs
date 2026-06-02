@@ -98,9 +98,7 @@ where
                 .get_tracked_download(&download.download_id)
                 .await?
             {
-                if full_download.has_generated_tracks() {
-                    to_cleanup.push(full_download);
-                }
+                to_cleanup.push(full_download);
             }
         }
 
