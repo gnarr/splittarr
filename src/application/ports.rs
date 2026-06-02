@@ -13,6 +13,9 @@ pub trait QueueSource {
 
 pub trait DownloadStore {
     async fn load_tracked_downloads(&self) -> Result<Vec<TrackedDownload>>;
+    async fn load_tracked_download_summaries(&self) -> Result<Vec<TrackedDownload>> {
+        self.load_tracked_downloads().await
+    }
     async fn get_tracked_download(&self, download_id: &str) -> Result<Option<TrackedDownload>>;
     async fn upsert_tracked_download(&self, download: &TrackedDownload) -> Result<()>;
     async fn touch_download_queue_presence(&self, download_id: &str) -> Result<()>;
