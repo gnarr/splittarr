@@ -142,6 +142,7 @@ mod tests {
                 message: None,
                 updated_at: String::new(),
             }],
+            generated_track_count: 1,
             last_error: None,
         };
 
