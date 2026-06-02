@@ -24,7 +24,6 @@ pub async fn register_failed_imports<S: DownloadStore>(
             download.status = candidate.status.clone();
             download.output_path = candidate.output_path.clone();
             download.tracked_download_state = candidate.tracked_download_state.clone();
-            store.touch_download_queue_presence(&download.download_id).await?;
             store.upsert_tracked_download(download).await?;
             continue;
         }
