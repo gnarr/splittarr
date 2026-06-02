@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use rcue::parser::parse_from_file;
 
 use crate::application::ports::{CueScanner, CueSplitter, DownloadStore};
@@ -53,9 +53,17 @@ where
     C: CueScanner,
     P: CueSplitter,
 {
-    store.mark_download_processing(&download.download_id).await?;
+    store
+        .mark_download_processing(&download.download_id)
+        .await?;
     let output_path = PathBuf::from(&download.output_path);
-    let scan = scanner.find_cue_sheets(&output_path).await?;
+    let scan_root = scan_root_for(&output_path)?;
+    let mut scan = scanner.find_cue_sheets(&scan_root).await?;
+
+    if output_path.is_file() {
+        scan.cue_files
+            .retain(|cue_path| cue_references_audio_file(cue_path, &output_path));
+    }
 
     for error in &scan.errors {
         eprintln!("Scan warning for {}: {error}", download.title);
@@ -187,4 +195,341 @@ fn file_size(path: &Path) -> Option<i64> {
     fs::metadata(path)
         .ok()
         .and_then(|metadata| i64::try_from(metadata.len()).ok())
+}
+
+fn scan_root_for(output_path: &Path) -> Result<PathBuf> {
+    if output_path.is_dir() {
+        return Ok(output_path.to_path_buf());
+    }
+    if output_path.is_file() {
+        return output_path.parent().map(Path::to_path_buf).ok_or_else(|| {
+            anyhow!(
+                "download output file has no parent directory: {}",
+                output_path.display()
+            )
+        });
+    }
+    Ok(output_path.to_path_buf())
+}
+
+fn cue_references_audio_file(cue_path: &Path, audio_path: &Path) -> bool {
+    let cue = match parse_from_file(&cue_path.to_string_lossy(), false) {
+        Ok(cue) => cue,
+        Err(err) => {
+            eprintln!(
+                "Unable to parse cue file while matching audio {}: {err}",
+                cue_path.display()
+            );
+            return false;
+        }
+    };
+    let cue_dir = cue_path.parent().unwrap_or_else(|| Path::new("."));
+
+    cue.files
+        .iter()
+        .map(|file| cue_dir.join(&file.file))
+        .any(|candidate| candidate == audio_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    use anyhow::Result;
+    use tempfile::tempdir;
+
+    use super::{cue_references_audio_file, process_tracked_download};
+    use crate::application::ports::{CueScanner, CueSplitter, DownloadStore};
+    use crate::domain::{
+        CueSheet, CueSheetStatus, DiscoveredCueSheets, InputFileKind, RecordedTrack, SplitOutcome,
+        SplitStatus, TrackCleanupStatus, TrackedDownload,
+    };
+
+    #[derive(Default)]
+    struct FakeStore {
+        states: Mutex<Vec<String>>,
+        last_error: Mutex<Option<String>>,
+        recorded_cues: Mutex<Vec<String>>,
+        recorded_tracks: Mutex<Vec<String>>,
+    }
+
+    impl DownloadStore for FakeStore {
+        async fn load_tracked_downloads(&self) -> Result<Vec<TrackedDownload>> {
+            Ok(Vec::new())
+        }
+
+        async fn get_tracked_download(
+            &self,
+            _download_id: &str,
+        ) -> Result<Option<TrackedDownload>> {
+            Ok(None)
+        }
+
+        async fn upsert_tracked_download(&self, _download: &TrackedDownload) -> Result<()> {
+            Ok(())
+        }
+
+        async fn mark_download_processing(&self, _download_id: &str) -> Result<()> {
+            self.states.lock().unwrap().push("processing".into());
+            Ok(())
+        }
+
+        async fn mark_download_awaiting_import(&self, _download_id: &str) -> Result<()> {
+            self.states.lock().unwrap().push("awaiting_import".into());
+            Ok(())
+        }
+
+        async fn mark_download_cleanup_started(&self, _download_id: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn mark_download_completed(&self, _download_id: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn mark_download_failed(
+            &self,
+            _download_id: &str,
+            last_error: Option<&str>,
+        ) -> Result<()> {
+            self.states.lock().unwrap().push("failed".into());
+            *self.last_error.lock().unwrap() = last_error.map(str::to_owned);
+            Ok(())
+        }
+
+        async fn get_or_create_cue_sheet(
+            &self,
+            download_id: &str,
+            path: &Path,
+        ) -> Result<CueSheet> {
+            self.recorded_cues
+                .lock()
+                .unwrap()
+                .push(path.to_string_lossy().to_string());
+            Ok(CueSheet {
+                id: format!("cue:{}", path.display()),
+                download_id: download_id.to_owned(),
+                path: path.to_string_lossy().to_string(),
+                status: CueSheetStatus::Pending,
+                message: None,
+                updated_at: "now".into(),
+                tracks: Vec::new(),
+            })
+        }
+
+        async fn record_input_file(
+            &self,
+            _download_id: &str,
+            _cue_sheet_id: Option<&str>,
+            _path: &Path,
+            _kind: InputFileKind,
+            _size_bytes: Option<i64>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn record_cue_result(
+            &self,
+            _cue_sheet: &CueSheet,
+            status: CueSheetStatus,
+            message: Option<&str>,
+            tracks: &[RecordedTrack],
+        ) -> Result<()> {
+            if status == CueSheetStatus::Split {
+                self.recorded_tracks
+                    .lock()
+                    .unwrap()
+                    .extend(tracks.iter().map(|track| track.path.clone()));
+            }
+            if status == CueSheetStatus::Failed {
+                *self.last_error.lock().unwrap() = message.map(str::to_owned);
+            }
+            Ok(())
+        }
+
+        async fn record_track_cleanup(
+            &self,
+            _download_id: &str,
+            _track_id: &str,
+            _status: TrackCleanupStatus,
+            _message: Option<&str>,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FakeScanner {
+        roots: Mutex<Vec<PathBuf>>,
+        cue_files: Vec<PathBuf>,
+    }
+
+    impl CueScanner for FakeScanner {
+        async fn find_cue_sheets(&self, root: &Path) -> Result<DiscoveredCueSheets> {
+            self.roots.lock().unwrap().push(root.to_path_buf());
+            Ok(DiscoveredCueSheets {
+                cue_files: self.cue_files.clone(),
+                errors: Vec::new(),
+            })
+        }
+    }
+
+    struct FakeSplitter {
+        calls: Mutex<Vec<PathBuf>>,
+    }
+
+    impl CueSplitter for FakeSplitter {
+        async fn split_cue(&self, cue_path: &Path) -> Result<SplitOutcome> {
+            self.calls.lock().unwrap().push(cue_path.to_path_buf());
+            Ok(SplitOutcome {
+                status: SplitStatus::Split,
+                tracks: vec![cue_path.with_file_name("01 - Track.flac")],
+                message: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn processes_file_output_path_using_parent_directory_and_matching_cue() {
+        let tmp = tempdir().unwrap();
+        let audio_path = tmp.path().join("single.flac");
+        let cue_path = tmp.path().join("single.cue");
+        fs::write(&audio_path, b"audio").unwrap();
+        fs::write(
+            &cue_path,
+            "FILE \"single.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+
+        let store = FakeStore::default();
+        let scanner = FakeScanner {
+            roots: Mutex::new(Vec::new()),
+            cue_files: vec![cue_path.clone()],
+        };
+        let splitter = FakeSplitter {
+            calls: Mutex::new(Vec::new()),
+        };
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Single".into(),
+            "completed".into(),
+            audio_path.to_string_lossy().to_string(),
+            "importFailed".into(),
+        );
+
+        process_tracked_download(&store, &scanner, &splitter, download)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            scanner.roots.lock().unwrap().as_slice(),
+            &[tmp.path().to_path_buf()]
+        );
+        assert_eq!(splitter.calls.lock().unwrap().as_slice(), &[cue_path]);
+        assert!(store
+            .states
+            .lock()
+            .unwrap()
+            .contains(&"awaiting_import".to_string()));
+    }
+
+    #[tokio::test]
+    async fn file_output_path_without_matching_cue_fails_with_no_cue_files_found() {
+        let tmp = tempdir().unwrap();
+        let audio_path = tmp.path().join("single.flac");
+        let cue_path = tmp.path().join("other.cue");
+        fs::write(&audio_path, b"audio").unwrap();
+        fs::write(
+            &cue_path,
+            "FILE \"other.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+
+        let store = FakeStore::default();
+        let scanner = FakeScanner {
+            roots: Mutex::new(Vec::new()),
+            cue_files: vec![cue_path],
+        };
+        let splitter = FakeSplitter {
+            calls: Mutex::new(Vec::new()),
+        };
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Single".into(),
+            "completed".into(),
+            audio_path.to_string_lossy().to_string(),
+            "importFailed".into(),
+        );
+
+        process_tracked_download(&store, &scanner, &splitter, download)
+            .await
+            .unwrap();
+
+        assert_eq!(splitter.calls.lock().unwrap().len(), 0);
+        assert_eq!(
+            store.last_error.lock().unwrap().as_deref(),
+            Some("no cue files found")
+        );
+    }
+
+    #[tokio::test]
+    async fn file_output_path_ignores_unrelated_cues_in_same_directory() {
+        let tmp = tempdir().unwrap();
+        let target_audio = tmp.path().join("target.flac");
+        let other_audio = tmp.path().join("other.flac");
+        let target_cue = tmp.path().join("target.cue");
+        let other_cue = tmp.path().join("other.cue");
+        fs::write(&target_audio, b"audio").unwrap();
+        fs::write(&other_audio, b"audio").unwrap();
+        fs::write(
+            &target_cue,
+            "FILE \"target.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        fs::write(
+            &other_cue,
+            "FILE \"other.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+
+        let store = FakeStore::default();
+        let scanner = FakeScanner {
+            roots: Mutex::new(Vec::new()),
+            cue_files: vec![other_cue, target_cue.clone()],
+        };
+        let splitter = FakeSplitter {
+            calls: Mutex::new(Vec::new()),
+        };
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Single".into(),
+            "completed".into(),
+            target_audio.to_string_lossy().to_string(),
+            "importFailed".into(),
+        );
+
+        process_tracked_download(&store, &scanner, &splitter, download)
+            .await
+            .unwrap();
+
+        assert_eq!(splitter.calls.lock().unwrap().as_slice(), &[target_cue]);
+    }
+
+    #[test]
+    fn cue_matching_checks_exact_referenced_audio_file() {
+        let tmp = tempdir().unwrap();
+        let target_audio = tmp.path().join("target.flac");
+        let target_cue = tmp.path().join("target.cue");
+        let other_audio = tmp.path().join("other.flac");
+        fs::write(&target_audio, b"audio").unwrap();
+        fs::write(
+            &target_cue,
+            "FILE \"target.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+
+        assert!(cue_references_audio_file(&target_cue, &target_audio));
+        assert!(!cue_references_audio_file(&target_cue, &other_audio));
+    }
 }

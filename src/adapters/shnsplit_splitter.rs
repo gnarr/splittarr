@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 use anyhow::{anyhow, Result};
 use rcue::parser::parse_from_file;
@@ -59,6 +61,10 @@ impl ShnsplitCueSplitter {
             .map(|file| file.file.as_str())
             .filter(|file| cue_dir.join(file).exists())
             .collect::<BTreeSet<_>>();
+        let referenced_paths = referenced_files
+            .iter()
+            .map(|file| cue_dir.join(file))
+            .collect::<Vec<_>>();
 
         if referenced_files.is_empty() {
             return Ok(SplitOutcome {
@@ -69,6 +75,7 @@ impl ShnsplitCueSplitter {
         }
 
         let overwrite = if self.overwrite { "always" } else { "never" };
+        let files_before = snapshot_audio_files(cue_dir)?;
         let output = {
             let mut command = Command::new(&self.shnsplit_path);
             command
@@ -79,6 +86,7 @@ impl ShnsplitCueSplitter {
                 .arg(cue_dir)
                 .arg("-t")
                 .arg(&self.format)
+                .args(decoder_args(&referenced_paths))
                 .arg("-O")
                 .arg(overwrite)
                 .arg("-o")
@@ -105,7 +113,11 @@ impl ShnsplitCueSplitter {
             ));
         }
 
-        let tracks = parse_generated_tracks(cue_dir, &stderr);
+        let mut tracks = parse_generated_tracks(cue_dir, &stderr);
+        if tracks.is_empty() {
+            let files_after = snapshot_audio_files(cue_dir)?;
+            tracks = detect_generated_tracks(&referenced_paths, &files_before, &files_after);
+        }
         if tracks.is_empty() {
             return Err(anyhow!(
                 "shnsplit succeeded for {} but no generated tracks were detected",
@@ -149,6 +161,71 @@ fn parse_generated_tracks(cue_dir: &Path, stderr: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+fn decoder_args(referenced_paths: &[PathBuf]) -> Vec<&'static str> {
+    if referenced_paths.is_empty() || !referenced_paths.iter().all(|path| is_flac_file(path)) {
+        return Vec::new();
+    }
+    vec!["-i", "flac flac -cd -s %f"]
+}
+
+fn detect_generated_tracks(
+    referenced_paths: &[PathBuf],
+    before: &BTreeSet<FileSnapshot>,
+    after: &BTreeSet<FileSnapshot>,
+) -> Vec<PathBuf> {
+    after
+        .iter()
+        .filter(|snapshot| !referenced_paths.iter().any(|path| path == &snapshot.path))
+        .filter(|snapshot| !before.contains(snapshot))
+        .map(|snapshot| snapshot.path.clone())
+        .collect()
+}
+
+fn snapshot_audio_files(root: &Path) -> Result<BTreeSet<FileSnapshot>> {
+    let mut files = BTreeSet::new();
+    for entry in fs::read_dir(root)
+        .map_err(|err| anyhow!("failed to list cue directory {}: {err}", root.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() || !is_audio_file(&path) {
+            continue;
+        }
+
+        let metadata = entry.metadata()?;
+        files.insert(FileSnapshot {
+            path,
+            size: metadata.len(),
+            modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        });
+    }
+    Ok(files)
+}
+
+fn is_flac_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("flac"))
+}
+
+fn is_audio_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "flac" | "wav" | "ape" | "wv" | "m4a" | "mp3" | "ogg" | "opus" | "tta" | "aiff"
+            )
+        })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct FileSnapshot {
+    path: PathBuf,
+    size: u64,
+    modified: SystemTime,
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -159,7 +236,9 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{parse_generated_tracks, ShnsplitCueSplitter};
+    use super::{
+        decoder_args, detect_generated_tracks, parse_generated_tracks, ShnsplitCueSplitter,
+    };
     use crate::domain::SplitStatus;
 
     #[test]
@@ -223,6 +302,71 @@ exit 2
         let tracks = parse_generated_tracks(tmp.path(), stderr);
 
         assert_eq!(tracks, vec![tmp.path().join("01 - Track.flac")]);
+    }
+
+    #[test]
+    fn falls_back_to_filesystem_detection_when_stderr_has_no_track_lines() {
+        let tmp = tempdir().unwrap();
+        let input = tmp.path().join("album.flac");
+        let output = tmp.path().join("01 - Track.flac");
+        fs::write(&input, b"input").unwrap();
+        let before = super::snapshot_audio_files(tmp.path()).unwrap();
+        fs::write(&output, b"track").unwrap();
+        let after = super::snapshot_audio_files(tmp.path()).unwrap();
+
+        let tracks = detect_generated_tracks(&[input], &before, &after);
+
+        assert_eq!(tracks, vec![output]);
+    }
+
+    #[test]
+    fn uses_explicit_flac_decoder_for_flac_inputs() {
+        let args = decoder_args(&[PathBuf::from("album.flac")]);
+
+        assert_eq!(args, vec!["-i", "flac flac -cd -s %f"]);
+    }
+
+    #[test]
+    fn splitter_detects_tracks_without_matching_stderr() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_fixture_album(tmp.path(), true);
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            r#"touch "Artist - Album - 01 - Track One.flac"
+echo "split complete" >&2
+exit 0
+"#,
+        );
+        let splitter = test_splitter(fake);
+
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
+
+        assert_eq!(result.status, SplitStatus::Split);
+        assert_eq!(
+            result.tracks,
+            vec![tmp.path().join("Artist - Album - 01 - Track One.flac")]
+        );
+    }
+
+    #[test]
+    fn splitter_passes_flac_decoder_argument() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_fixture_album(tmp.path(), true);
+        let args_log = tmp.path().join("args.log");
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            &format!(
+                "printf '%s\\n' \"$@\" > \"{}\"\ntouch \"Artist - Album - 01 - Track One.flac\"\necho \"Splitting [album.flac] (0:01.00) --> [Artist - Album - 01 - Track One.flac] (0:01.00) :\" >&2\nexit 0\n",
+                args_log.display()
+            ),
+        );
+        let splitter = test_splitter(fake);
+
+        splitter.split_cue_sync(&cue_path).unwrap();
+        let args = fs::read_to_string(args_log).unwrap();
+
+        assert!(args.contains("-i"));
+        assert!(args.contains("flac flac -cd -s %f"));
     }
 
     fn test_splitter(shnsplit_path: PathBuf) -> ShnsplitCueSplitter {

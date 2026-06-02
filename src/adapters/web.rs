@@ -1,11 +1,11 @@
 use axum::{
-    Router,
     extract::{Path, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::get,
+    Router,
 };
-use maud::{DOCTYPE, Markup, PreEscaped, html};
+use maud::{html, Markup, PreEscaped, DOCTYPE};
 
 use crate::adapters::sqlite_download_store::{DownloadRow, SqliteDownloadStore};
 use crate::application::ports::DownloadStore;
@@ -24,7 +24,10 @@ pub fn router(store: SqliteDownloadStore) -> Router {
         .route("/", get(index))
         .route("/healthz", get(healthz))
         .route("/downloads/{download_id}", get(download_detail))
-        .route("/downloads/{download_id}/content", get(download_detail_content))
+        .route(
+            "/downloads/{download_id}/content",
+            get(download_detail_content),
+        )
         .route("/downloads/{download_id}/row", get(download_row_route))
         .route("/downloads/rows", get(download_rows_route))
         .with_state(WebState { store })
@@ -107,7 +110,10 @@ async fn download_rows_route(State(state): State<WebState>) -> impl IntoResponse
     }
 }
 
-async fn download_detail(State(state): State<WebState>, Path(download_id): Path<String>) -> Response {
+async fn download_detail(
+    State(state): State<WebState>,
+    Path(download_id): Path<String>,
+) -> Response {
     match state.store.get_tracked_download(&download_id).await {
         Ok(Some(download)) => Html(page(
             &download.title,
@@ -526,7 +532,9 @@ mod tests {
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let rendered = String::from_utf8(body.to_vec()).unwrap();
         assert!(rendered.contains("No downloads have been tracked yet."));
     }
@@ -581,7 +589,9 @@ mod tests {
             )
             .await
             .unwrap();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let rendered = String::from_utf8(body.to_vec()).unwrap();
         assert!(rendered.contains("Input Files"));
         assert!(rendered.contains("/downloads/album/album.cue"));
@@ -603,10 +613,17 @@ mod tests {
 
         let app = router(store);
         let response = app
-            .oneshot(Request::builder().uri("/downloads/rows").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/downloads/rows")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let rendered = String::from_utf8(body.to_vec()).unwrap();
 
         assert!(rendered.contains("download-row-abc"));

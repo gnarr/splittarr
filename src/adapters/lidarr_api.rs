@@ -273,7 +273,10 @@ mod tests {
     #[tokio::test]
     async fn client_stops_when_empty_page_is_returned() {
         let (url, requests) = serve_sequence(vec![
-            ("200 OK", r#"{"totalRecords":5,"records":[{"downloadId":"a"}]}"#),
+            (
+                "200 OK",
+                r#"{"totalRecords":5,"records":[{"downloadId":"a"}]}"#,
+            ),
             ("200 OK", r#"{"totalRecords":5,"records":[]}"#),
         ])
         .await;
@@ -324,9 +327,18 @@ mod tests {
     #[tokio::test]
     async fn client_errors_when_max_pages_is_exceeded() {
         let (url, _) = serve_sequence(vec![
-            ("200 OK", r#"{"totalRecords":999,"records":[{"downloadId":"a"}]}"#),
-            ("200 OK", r#"{"totalRecords":999,"records":[{"downloadId":"b"}]}"#),
-            ("200 OK", r#"{"totalRecords":999,"records":[{"downloadId":"c"}]}"#),
+            (
+                "200 OK",
+                r#"{"totalRecords":999,"records":[{"downloadId":"a"}]}"#,
+            ),
+            (
+                "200 OK",
+                r#"{"totalRecords":999,"records":[{"downloadId":"b"}]}"#,
+            ),
+            (
+                "200 OK",
+                r#"{"totalRecords":999,"records":[{"downloadId":"c"}]}"#,
+            ),
         ])
         .await;
         let client = LidarrQueueSource::new(&LidarrSettings {
@@ -353,7 +365,9 @@ mod tests {
         let request_lines = Arc::new(Mutex::new(Vec::new()));
         let shared_lines = Arc::clone(&request_lines);
         let shared_responses = Arc::new(Mutex::new(
-            responses.into_iter().collect::<VecDeque<(&'static str, &'static str)>>(),
+            responses
+                .into_iter()
+                .collect::<VecDeque<(&'static str, &'static str)>>(),
         ));
         let queue = Arc::clone(&shared_responses);
 
