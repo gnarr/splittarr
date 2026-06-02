@@ -154,7 +154,16 @@ async fn snapshot_input_files<S: DownloadStore>(
         .await?;
 
     let cue_path_str = cue_path.to_string_lossy();
-    let cue = parse_from_file(&cue_path_str, false)?;
+    let cue = match parse_from_file(&cue_path_str, false) {
+        Ok(cue) => cue,
+        Err(err) => {
+            eprintln!(
+                "Unable to parse cue file for input snapshot {}: {err}",
+                cue_path.display()
+            );
+            return Ok(());
+        }
+    };
     let cue_dir = cue_path.parent().unwrap_or_else(|| Path::new("."));
 
     for input in cue.files.iter().map(|file| cue_dir.join(&file.file)) {
