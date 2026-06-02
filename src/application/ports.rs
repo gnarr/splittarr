@@ -18,7 +18,6 @@ pub trait DownloadStore {
     }
     async fn get_tracked_download(&self, download_id: &str) -> Result<Option<TrackedDownload>>;
     async fn upsert_tracked_download(&self, download: &TrackedDownload) -> Result<()>;
-    async fn touch_download_queue_presence(&self, download_id: &str) -> Result<()>;
     async fn mark_download_processing(&self, download_id: &str) -> Result<()>;
     async fn mark_download_awaiting_import(&self, download_id: &str) -> Result<()>;
     async fn mark_download_cleanup_started(&self, download_id: &str) -> Result<()>;
