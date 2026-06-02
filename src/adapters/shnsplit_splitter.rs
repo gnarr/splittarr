@@ -75,7 +75,7 @@ impl ShnsplitCueSplitter {
         }
 
         let overwrite = if self.overwrite { "always" } else { "never" };
-        let files_before = snapshot_audio_files(cue_dir)?;
+        let files_before = snapshot_audio_files_best_effort(cue_dir, cue_path);
         let output = {
             let mut command = Command::new(&self.shnsplit_path);
             command
@@ -115,7 +115,7 @@ impl ShnsplitCueSplitter {
 
         let mut tracks = parse_generated_tracks(cue_dir, &stderr);
         if tracks.is_empty() {
-            let files_after = snapshot_audio_files(cue_dir)?;
+            let files_after = snapshot_audio_files_best_effort(cue_dir, cue_path);
             tracks = detect_generated_tracks(&referenced_paths, &files_before, &files_after);
         }
         if tracks.is_empty() {
@@ -202,6 +202,19 @@ fn snapshot_audio_files(root: &Path) -> Result<BTreeSet<FileSnapshot>> {
     Ok(files)
 }
 
+fn snapshot_audio_files_best_effort(root: &Path, cue_path: &Path) -> BTreeSet<FileSnapshot> {
+    match snapshot_audio_files(root) {
+        Ok(files) => files,
+        Err(err) => {
+            eprintln!(
+                "Unable to snapshot audio files for {}: {err}",
+                cue_path.display()
+            );
+            BTreeSet::new()
+        }
+    }
+}
+
 fn is_flac_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -237,7 +250,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        decoder_args, detect_generated_tracks, parse_generated_tracks, ShnsplitCueSplitter,
+        decoder_args, detect_generated_tracks, parse_generated_tracks, snapshot_audio_files_best_effort,
+        ShnsplitCueSplitter,
     };
     use crate::domain::SplitStatus;
 
@@ -367,6 +381,17 @@ exit 0
 
         assert!(args.contains("-i"));
         assert!(args.contains("flac flac -cd -s %f"));
+    }
+
+    #[test]
+    fn best_effort_snapshot_failure_does_not_block_stderr_track_detection() {
+        let tmp = tempdir().unwrap();
+        let cue_path = tmp.path().join("album.cue");
+        let missing_dir = tmp.path().join("missing");
+
+        let files = snapshot_audio_files_best_effort(&missing_dir, &cue_path);
+
+        assert!(files.is_empty());
     }
 
     fn test_splitter(shnsplit_path: PathBuf) -> ShnsplitCueSplitter {
