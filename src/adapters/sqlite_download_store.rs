@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::application::ports::DownloadStore;
 use crate::domain::{
     CueSheet, CueSheetStatus, DownloadLifecycleState, GeneratedTrack, InputFile, InputFileKind,
-    RecordedTrack, TrackCleanupStatus, TrackedDownload,
+    RecordedTrack, TrackCleanupOutcome, TrackCleanupStatus, TrackedDownload,
 };
 
 #[derive(Debug, Clone)]
@@ -435,6 +435,40 @@ impl SqliteDownloadStore {
         tx.commit()?;
         Ok(())
     }
+
+    fn record_track_cleanups_sync(
+        &self,
+        download_id: &str,
+        outcomes: &[TrackCleanupOutcome],
+    ) -> Result<()> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction()?;
+        for outcome in outcomes {
+            tx.execute(
+                "UPDATE tracks
+                 SET cleanup_status = ?2,
+                     cleanup_message = ?3,
+                     deleted_at = CASE
+                         WHEN ?2 IN ('deleted', 'missing') THEN CURRENT_TIMESTAMP
+                         ELSE NULL
+                     END
+                 WHERE id = ?1",
+                params![
+                    &outcome.track_id,
+                    outcome.status.as_str(),
+                    outcome.message.as_deref()
+                ],
+            )?;
+        }
+        tx.execute(
+            "UPDATE downloads
+             SET updated_at = CURRENT_TIMESTAMP
+             WHERE download_id = ?",
+            [download_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 impl DownloadStore for SqliteDownloadStore {
@@ -592,6 +626,21 @@ impl DownloadStore for SqliteDownloadStore {
         .await
         .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
     }
+
+    async fn record_track_cleanups(
+        &self,
+        download_id: &str,
+        outcomes: &[TrackCleanupOutcome],
+    ) -> Result<()> {
+        let store = self.clone();
+        let download_id = download_id.to_owned();
+        let outcomes = outcomes.to_vec();
+        tokio::task::spawn_blocking(move || {
+            store.record_track_cleanups_sync(&download_id, &outcomes)
+        })
+        .await
+        .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
 }
 
 fn map_download_row(
@@ -609,7 +658,7 @@ fn map_download_row(
         status: row.get(2)?,
         output_path: row.get(3)?,
         tracked_download_state: row.get(4)?,
-        lifecycle_state: DownloadLifecycleState::from_db(row.get::<_, String>(5)?.as_str()),
+        lifecycle_state: lifecycle_state_from_row(row, 5)?,
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
         first_seen_at: row.get(8)?,
@@ -631,7 +680,7 @@ fn map_download_history_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Downloa
         status: row.get(2)?,
         output_path: row.get(3)?,
         tracked_download_state: row.get(4)?,
-        lifecycle_state: DownloadLifecycleState::from_db(row.get::<_, String>(5)?.as_str()),
+        lifecycle_state: lifecycle_state_from_row(row, 5)?,
         updated_at: row.get(6)?,
         completed_at: row.get(7)?,
         generated_track_count: row.get::<_, i64>(8)? as usize,
@@ -647,7 +696,7 @@ fn map_download_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tracked
         status: row.get(2)?,
         output_path: row.get(3)?,
         tracked_download_state: row.get(4)?,
-        lifecycle_state: DownloadLifecycleState::from_db(row.get::<_, String>(5)?.as_str()),
+        lifecycle_state: lifecycle_state_from_row(row, 5)?,
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
         first_seen_at: row.get(8)?,
@@ -660,6 +709,17 @@ fn map_download_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tracked
         generated_track_count: row.get::<_, i64>(16)? as usize,
         last_error: row.get(15)?,
     })
+}
+
+fn lifecycle_state_from_row(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<DownloadLifecycleState> {
+    Ok(DownloadLifecycleState::from_db(
+        row.get::<_, Option<String>>(index)?
+            .as_deref()
+            .unwrap_or("detected"),
+    ))
 }
 
 fn cue_sheets_for(conn: &Connection, download_id: &str) -> rusqlite::Result<Vec<CueSheet>> {
@@ -1049,8 +1109,8 @@ mod tests {
 
     use super::SqliteDownloadStore;
     use crate::domain::{
-        CueSheetStatus, DownloadLifecycleState, InputFileKind, RecordedTrack, TrackCleanupStatus,
-        TrackedDownload,
+        CueSheetStatus, DownloadLifecycleState, InputFileKind, RecordedTrack, TrackCleanupOutcome,
+        TrackCleanupStatus, TrackedDownload,
     };
 
     #[test]
@@ -1314,6 +1374,106 @@ mod tests {
             .unwrap();
 
         assert_eq!(busy_timeout_ms, super::SQLITE_BUSY_TIMEOUT.as_millis() as i64);
+    }
+
+    #[test]
+    fn record_track_cleanups_updates_multiple_tracks_in_one_call() {
+        let tmp = tempdir().unwrap();
+        let repo = SqliteDownloadStore::open(tmp.path()).unwrap();
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Album".into(),
+            "completed".into(),
+            "/downloads/album".into(),
+            "importFailed".into(),
+        );
+
+        repo.upsert_tracked_download_sync(&download).unwrap();
+        let cue = repo
+            .get_or_create_cue_sheet_sync(
+                &download.download_id,
+                Path::new("/downloads/album/album.cue"),
+            )
+            .unwrap();
+        repo.record_cue_result_sync(
+            &cue,
+            CueSheetStatus::Split,
+            None,
+            &[
+                RecordedTrack {
+                    path: "/downloads/album/01.flac".into(),
+                    size_bytes: Some(111),
+                },
+                RecordedTrack {
+                    path: "/downloads/album/02.flac".into(),
+                    size_bytes: Some(222),
+                },
+            ],
+        )
+        .unwrap();
+
+        let stored = repo
+            .get_tracked_download_sync("download-1")
+            .unwrap()
+            .unwrap();
+        let outcomes = stored.cue_sheets[0]
+            .tracks
+            .iter()
+            .map(|track| TrackCleanupOutcome {
+                track_id: track.id.clone(),
+                status: TrackCleanupStatus::Deleted,
+                message: None,
+            })
+            .collect::<Vec<_>>();
+
+        repo.record_track_cleanups_sync("download-1", &outcomes)
+            .unwrap();
+
+        let refreshed = repo
+            .get_tracked_download_sync("download-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(refreshed.cue_sheets[0].tracks.len(), 2);
+        assert!(refreshed.cue_sheets[0]
+            .tracks
+            .iter()
+            .all(|track| track.cleanup_status == TrackCleanupStatus::Deleted));
+    }
+
+    #[test]
+    fn null_lifecycle_state_defaults_to_detected() {
+        let tmp = tempdir().unwrap();
+        let repo = SqliteDownloadStore::open(tmp.path()).unwrap();
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Album".into(),
+            "completed".into(),
+            "/downloads/album".into(),
+            "importFailed".into(),
+        );
+        repo.upsert_tracked_download_sync(&download).unwrap();
+        let conn = Connection::open(&repo.db_path).unwrap();
+        conn.execute(
+            "UPDATE downloads SET lifecycle_state = NULL WHERE download_id = ?",
+            ["download-1"],
+        )
+        .unwrap();
+        drop(conn);
+
+        let summary = repo
+            .load_tracked_download_summaries_sync()
+            .unwrap()
+            .pop()
+            .unwrap();
+        let full = repo
+            .get_tracked_download_sync("download-1")
+            .unwrap()
+            .unwrap();
+        let row = repo.load_download_row_sync("download-1").unwrap().unwrap();
+
+        assert_eq!(summary.lifecycle_state, DownloadLifecycleState::Detected);
+        assert_eq!(full.lifecycle_state, DownloadLifecycleState::Detected);
+        assert_eq!(row.lifecycle_state, DownloadLifecycleState::Detected);
     }
 
     #[test]

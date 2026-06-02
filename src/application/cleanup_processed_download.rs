@@ -18,22 +18,17 @@ pub async fn cleanup_processed_download<S: DownloadStore, C: TrackCleanup>(
         .with_context(|| format!("cleanup failed for {}", download.title))?;
 
     let mut failures = Vec::new();
-    for outcome in outcomes {
+    for outcome in &outcomes {
         if outcome.status == TrackCleanupStatus::DeleteFailed {
             if let Some(message) = &outcome.message {
                 failures.push(message.clone());
             }
         }
-        store
-            .record_track_cleanup(
-                &download.download_id,
-                &outcome.track_id,
-                outcome.status,
-                outcome.message.as_deref(),
-            )
-            .await
-            .with_context(|| format!("record cleanup result for {}", download.title))?;
     }
+    store
+        .record_track_cleanups(&download.download_id, &outcomes)
+        .await
+        .with_context(|| format!("record cleanup results for {}", download.title))?;
 
     if failures.is_empty() {
         store
