@@ -1,6 +1,42 @@
 # Changelog
 
 - - -
+## [v0.3.0](https://github.com/gnarr/splittarr/compare/9123e413e4a036f917435821dcb8f69a3b0dfc09..v0.3.0) - 2026-06-02
+#### Features
+- (**downloads**) add persistent history ui - ([b698edc](https://github.com/gnarr/splittarr/commit/b698edc65683b6319fb75a552636e56b13675f2c)) - Gunnar Cortes
+#### Bug Fixes
+- (**cleanup**) persist top-level cleanup failures - ([fa6cd33](https://github.com/gnarr/splittarr/commit/fa6cd33171359f7aa68969aa68bb231c3c68c7bd)) - Gunnar Cortes
+- (**cleanup**) fail downloads on silent delete errors - ([4f16668](https://github.com/gnarr/splittarr/commit/4f16668e47b8e6493f5607be6c5a8f448149df9d)) - Gunnar Cortes
+- (**downloads**) harden tracked download persistence - ([d01adff](https://github.com/gnarr/splittarr/commit/d01adff974b00cb4f87036393d0d06841d9d5433)) - Gunnar Cortes
+- (**lidarr**) paginate queue results for failed imports - ([fdf16e3](https://github.com/gnarr/splittarr/commit/fdf16e38a66569ecab9322edb567f111334a3ee5)) - Gunnar Cortes
+- (**monitor**) reduce runtime and sqlite contention - ([6018263](https://github.com/gnarr/splittarr/commit/60182631b335ffa56f967dd88e38bdf180d38ad4)) - Gunnar Cortes
+- (**runtime**) isolate monitor loop on its own thread - ([fdf9384](https://github.com/gnarr/splittarr/commit/fdf9384f122c74997b3c456cf307425cc8e657e2)) - Gunnar Cortes
+- (**splittarr**) handle failed imports more robustly - ([0c49337](https://github.com/gnarr/splittarr/commit/0c49337bdb2f7c2e6186c45f8be06d6321de4961)) - Gunnar Cortes
+- (**splitter**) make track snapshots best effort - ([f01c41a](https://github.com/gnarr/splittarr/commit/f01c41a9853a52f7f59f90507a3d25dc13cdde91)) - Gunnar Cortes
+- (**store**) batch cleanup writes and harden state loading - ([0523505](https://github.com/gnarr/splittarr/commit/0523505efaa035e1049bf40d638dbc1eb8e4bb8f)) - Gunnar Cortes
+- test data mismatch - ([b6f0955](https://github.com/gnarr/splittarr/commit/b6f0955e0ead87ea462d80370521b5f38eb0b284)) - Gunnar Cortes
+- treating cue parsing for input-file snapshotting as best-effort - ([3e84fc2](https://github.com/gnarr/splittarr/commit/3e84fc2cc2e3a5e7f2bc82868ac9d17302365a86)) - Gunnar Cortes
+- remove redundant touch_download_queue_presence() - ([db2196a](https://github.com/gnarr/splittarr/commit/db2196aa95b508a489c9d9f91a8d15d577e41240)) - Gunnar Cortes
+- bind UI only to localhost - ([65728c7](https://github.com/gnarr/splittarr/commit/65728c7f1df4a06785b2ee39c60886e28ae6ca43)) - Gunnar Cortes
+#### Performance
+- (**downloads**) avoid extra cleanup graph lookups - ([8d00d0f](https://github.com/gnarr/splittarr/commit/8d00d0fd271fd1f9a7da72a4ae1a76a17b951877)) - Gunnar Cortes
+- replace per-row polling loop with a single bulk history refresh endpoint. - ([b64d2e0](https://github.com/gnarr/splittarr/commit/b64d2e00129ef1820575a52730fa989dec0c6e5e)) - Gunnar Cortes
+#### Refactoring
+- (**architecture**) migrate to hexagonal modules - ([9123e41](https://github.com/gnarr/splittarr/commit/9123e413e4a036f917435821dcb8f69a3b0dfc09)) - Gunnar Cortes
+- optimize graph loading from DB - ([7d12a08](https://github.com/gnarr/splittarr/commit/7d12a080bd84e16c15ca30bc846a81fa6fe4699f)) - Gunnar Cortes
+#### Miscellaneous Chores
+- add auth warning to README - ([673eac1](https://github.com/gnarr/splittarr/commit/673eac183ed74e05740e513cc75328412d49e7b2)) - Gunnar Cortes
+- remove unused import - ([b597cce](https://github.com/gnarr/splittarr/commit/b597cce8598febb76565fd27dd15c277b2e4cec4)) - Gunnar Cortes
+- remove unused code - ([0100915](https://github.com/gnarr/splittarr/commit/010091592b2e3dde3a88faf428c2f901d6bcf71c)) - Gunnar Cortes
+- remove tokio signal from Cargo - ([000ac7d](https://github.com/gnarr/splittarr/commit/000ac7dba61d95a34b6584a73eecc3f419a72a05)) - Gunnar Cortes
+- use 127.0.0.1 as default bind_address in config.toml.example - ([26439dd](https://github.com/gnarr/splittarr/commit/26439dd2ee9c912454d6214ef313684003a83d3f)) - Gunnar Cortes
+- use 127.0.0.1 for all examples in README - ([70c7e13](https://github.com/gnarr/splittarr/commit/70c7e1398d108c791d1150866600e58d90c92577)) - Gunnar Cortes
+- update default UI listen in README - ([cea6ba3](https://github.com/gnarr/splittarr/commit/cea6ba3f246ea6c04f3574e5abcfebdc7805ab98)) - Gunnar Cortes
+#### Style
+- (**web**) match rooterr ui theme - ([2735e0b](https://github.com/gnarr/splittarr/commit/2735e0beebcab6b44b64ad98af5026ace03e9e1f)) - Gunnar Cortes
+
+- - -
+
 ## [v0.2.6](https://github.com/gnarr/splittarr/compare/4b6c1a77545c53a7508a6f6107d6dfa492a20fc8..v0.2.6) - 2026-05-27
 #### Bug Fixes
 - (**ci**) print cocogitto logs - ([7d60afc](https://github.com/gnarr/splittarr/commit/7d60afc0400cb7b632af3c37488b4e155a34f0ca)) - Gunnar Cortes
