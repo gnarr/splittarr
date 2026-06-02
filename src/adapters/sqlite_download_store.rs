@@ -51,6 +51,25 @@ impl SqliteDownloadStore {
         Ok(downloads)
     }
 
+    fn load_tracked_download_summaries_sync(&self) -> Result<Vec<TrackedDownload>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT download_id, title, status, output_path, tracked_download_state,
+                    lifecycle_state, created_at, updated_at, first_seen_at, last_seen_in_queue_at,
+                    processing_started_at, processing_finished_at, cleanup_started_at,
+                    cleanup_finished_at, completed_at, last_error
+             FROM downloads
+             ORDER BY updated_at DESC, download_id DESC",
+        )?;
+        let rows = stmt.query_map([], map_download_summary_row)?;
+
+        let mut downloads = Vec::new();
+        for row in rows {
+            downloads.push(row?);
+        }
+        Ok(downloads)
+    }
+
     fn get_tracked_download_sync(&self, download_id: &str) -> Result<Option<TrackedDownload>> {
         let conn = self.connect()?;
         conn.query_row(
@@ -319,6 +338,13 @@ impl DownloadStore for SqliteDownloadStore {
             .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
     }
 
+    async fn load_tracked_download_summaries(&self) -> Result<Vec<TrackedDownload>> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.load_tracked_download_summaries_sync())
+            .await
+            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
+
     async fn get_tracked_download(&self, download_id: &str) -> Result<Option<TrackedDownload>> {
         let store = self.clone();
         let download_id = download_id.to_owned();
@@ -463,6 +489,29 @@ fn map_download_row(conn: &Connection, row: &rusqlite::Row<'_>) -> rusqlite::Res
         input_files: input_files_for(conn, &download_id)?,
         cue_sheets: cue_sheets_for(conn, &download_id)?,
         download_id,
+        title: row.get(1)?,
+        status: row.get(2)?,
+        output_path: row.get(3)?,
+        tracked_download_state: row.get(4)?,
+        lifecycle_state: DownloadLifecycleState::from_db(row.get::<_, String>(5)?.as_str()),
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+        first_seen_at: row.get(8)?,
+        last_seen_in_queue_at: row.get(9)?,
+        processing_started_at: row.get(10)?,
+        processing_finished_at: row.get(11)?,
+        cleanup_started_at: row.get(12)?,
+        cleanup_finished_at: row.get(13)?,
+        completed_at: row.get(14)?,
+        last_error: row.get(15)?,
+    })
+}
+
+fn map_download_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackedDownload> {
+    Ok(TrackedDownload {
+        input_files: Vec::new(),
+        cue_sheets: Vec::new(),
+        download_id: row.get(0)?,
         title: row.get(1)?,
         status: row.get(2)?,
         output_path: row.get(3)?,

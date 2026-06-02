@@ -70,7 +70,10 @@ where
     }
 
     pub async fn run_once(&self) -> Result<()> {
-        let mut downloads = self.download_store.load_tracked_downloads().await?;
+        let mut downloads = self
+            .download_store
+            .load_tracked_download_summaries()
+            .await?;
         println!("{} downloads registered in Splittarr", downloads.len());
 
         let snapshot = self.queue_source.queue_snapshot().await?;
@@ -87,7 +90,19 @@ where
         )
         .await?;
 
-        let (to_process, to_cleanup) = classify_downloads(downloads, &snapshot);
+        let (to_process, to_cleanup_candidates) = classify_downloads(downloads, &snapshot);
+        let mut to_cleanup = Vec::new();
+        for download in to_cleanup_candidates {
+            if let Some(full_download) = self
+                .download_store
+                .get_tracked_download(&download.download_id)
+                .await?
+            {
+                if full_download.has_generated_tracks() {
+                    to_cleanup.push(full_download);
+                }
+            }
+        }
 
         println!("{} downloads to be processed", to_process.len());
 
