@@ -1,4 +1,5 @@
 pub mod filesystem_cleanup;
+pub mod filesystem_cue_input_inspector;
 pub mod filesystem_cue_scanner;
 pub mod lidarr_api;
 pub mod shnsplit_splitter;

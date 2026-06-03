@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -76,6 +76,23 @@ pub trait DownloadStore {
 
 pub trait CueScanner {
     async fn find_cue_sheets(&self, root: &Path) -> Result<DiscoveredCueSheets>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CueInputSnapshot {
+    pub cue_size_bytes: Option<i64>,
+    pub audio_inputs: Vec<CueReferencedAudioInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CueReferencedAudioInput {
+    pub path: PathBuf,
+    pub size_bytes: Option<i64>,
+}
+
+pub trait CueInputInspector {
+    async fn snapshot_inputs(&self, cue_path: &Path) -> Result<CueInputSnapshot>;
+    async fn cue_references_audio_file(&self, cue_path: &Path, audio_path: &Path) -> Result<bool>;
 }
 
 pub trait CueSplitter {

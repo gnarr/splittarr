@@ -6,26 +6,29 @@ use chrono::prelude::*;
 use crate::application::cleanup_processed_download::cleanup_processed_download;
 use crate::application::monitor_download_queue::classify_downloads;
 use crate::application::ports::{
-    CueScanner, CueSplitter, DownloadStore, QueueSource, TrackCleanup,
+    CueInputInspector, CueScanner, CueSplitter,
+    DownloadStore, QueueSource, TrackCleanup,
 };
 use crate::application::process_tracked_download::{
     process_tracked_download, register_failed_imports,
 };
 
-pub struct MonitorService<Q, S, C, P, X> {
+pub struct MonitorService<Q, S, C, I, P, X> {
     queue_source: Q,
     download_store: S,
     cue_scanner: C,
+    cue_input_inspector: I,
     cue_splitter: P,
     track_cleanup: X,
     check_frequency_seconds: u64,
 }
 
-impl<Q, S, C, P, X> MonitorService<Q, S, C, P, X> {
+impl<Q, S, C, I, P, X> MonitorService<Q, S, C, I, P, X> {
     pub fn new(
         queue_source: Q,
         download_store: S,
         cue_scanner: C,
+        cue_input_inspector: I,
         cue_splitter: P,
         track_cleanup: X,
         check_frequency_seconds: u64,
@@ -34,6 +37,7 @@ impl<Q, S, C, P, X> MonitorService<Q, S, C, P, X> {
             queue_source,
             download_store,
             cue_scanner,
+            cue_input_inspector,
             cue_splitter,
             track_cleanup,
             check_frequency_seconds,
@@ -41,11 +45,12 @@ impl<Q, S, C, P, X> MonitorService<Q, S, C, P, X> {
     }
 }
 
-impl<Q, S, C, P, X> MonitorService<Q, S, C, P, X>
+impl<Q, S, C, I, P, X> MonitorService<Q, S, C, I, P, X>
 where
     Q: QueueSource,
     S: DownloadStore,
     C: CueScanner,
+    I: CueInputInspector,
     P: CueSplitter,
     X: TrackCleanup,
 {
@@ -109,6 +114,7 @@ where
             if let Err(err) = process_tracked_download(
                 &self.download_store,
                 &self.cue_scanner,
+                &self.cue_input_inspector,
                 &self.cue_splitter,
                 download.clone(),
             )
@@ -148,10 +154,12 @@ mod tests {
     use super::MonitorService;
     use crate::adapters::sqlite_download_store::SqliteDownloadStore;
     use crate::application::ports::{
-        CueScanner, CueSplitter, DownloadStore, QueueSource, TrackCleanup,
+        CueInputInspector, CueInputSnapshot, CueReferencedAudioInput, CueScanner, CueSplitter,
+        DownloadStore, QueueSource, TrackCleanup,
     };
     use crate::domain::{
-        DiscoveredCueSheets, DownloadLifecycleState, FailedImportCandidate, QueueSnapshot, SplitOutcome, SplitStatus, TrackCleanupOutcome, TrackCleanupStatus,
+        DiscoveredCueSheets, DownloadLifecycleState, FailedImportCandidate, QueueSnapshot,
+        SplitOutcome, SplitStatus, TrackCleanupOutcome, TrackCleanupStatus,
     };
 
     struct FakeQueue {
@@ -179,6 +187,30 @@ mod tests {
                 cue_files: vec![self.cue_path.clone()],
                 errors: Vec::new(),
             })
+        }
+    }
+
+    struct FakeInspector;
+
+    impl CueInputInspector for FakeInspector {
+        async fn snapshot_inputs(&self, cue_path: &Path) -> anyhow::Result<CueInputSnapshot> {
+            Ok(CueInputSnapshot {
+                cue_size_bytes: fs::metadata(cue_path)
+                    .ok()
+                    .and_then(|metadata| i64::try_from(metadata.len()).ok()),
+                audio_inputs: vec![CueReferencedAudioInput {
+                    path: cue_path.with_extension("flac"),
+                    size_bytes: Some(5),
+                }],
+            })
+        }
+
+        async fn cue_references_audio_file(
+            &self,
+            cue_path: &Path,
+            audio_path: &Path,
+        ) -> anyhow::Result<bool> {
+            Ok(cue_path.file_stem() == audio_path.file_stem())
         }
     }
 
@@ -267,6 +299,7 @@ FILE "album.flac" WAVE
             FakeScanner {
                 cue_path: cue_path.clone(),
             },
+            FakeInspector,
             FakeSplitter {
                 output_track: split_track.clone(),
             },
