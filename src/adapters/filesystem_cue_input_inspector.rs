@@ -47,10 +47,7 @@ impl CueInputInspector for FilesystemCueInputInspector {
     ) -> Result<Vec<PathBuf>> {
         let audio_path = audio_path.to_path_buf();
         tokio::task::spawn_blocking(move || {
-            Ok(cue_files
-                .into_iter()
-                .filter(|cue_path| cue_references_audio_file_sync(cue_path, &audio_path))
-                .collect())
+            Ok(filter_cue_files_for_audio_sync(cue_files, &audio_path))
         })
         .await
         .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
@@ -103,6 +100,13 @@ fn cue_references_audio_file_sync(cue_path: &Path, audio_path: &Path) -> bool {
         .iter()
         .map(|file| cue_dir.join(&file.file))
         .any(|candidate| candidate == audio_path)
+}
+
+fn filter_cue_files_for_audio_sync(cue_files: Vec<PathBuf>, audio_path: &Path) -> Vec<PathBuf> {
+    cue_files
+        .into_iter()
+        .filter(|cue_path| cue_references_audio_file_sync(cue_path, audio_path))
+        .collect()
 }
 
 fn existing_audio_input(path: PathBuf) -> Option<CueReferencedAudioInput> {
