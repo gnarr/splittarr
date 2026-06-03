@@ -61,8 +61,9 @@ where
     let mut scan = scanner.find_cue_sheets(&scan_root).await?;
 
     if output_path.is_file() {
-        scan.cue_files =
-            filter_cue_files_for_audio(inspector, scan.cue_files, &output_path).await?;
+        scan.cue_files = inspector
+            .filter_cue_files_for_audio(scan.cue_files, &output_path)
+            .await?;
     }
 
     for error in &scan.errors {
@@ -198,23 +199,6 @@ fn scan_root_for(output_path: &Path) -> Result<PathBuf> {
         });
     }
     Ok(output_path.to_path_buf())
-}
-
-async fn filter_cue_files_for_audio<I: CueInputInspector>(
-    inspector: &I,
-    cue_files: Vec<PathBuf>,
-    audio_path: &Path,
-) -> Result<Vec<PathBuf>> {
-    let mut matching = Vec::new();
-    for cue_path in cue_files {
-        if inspector
-            .cue_references_audio_file(&cue_path, audio_path)
-            .await?
-        {
-            matching.push(cue_path);
-        }
-    }
-    Ok(matching)
 }
 
 #[cfg(test)]

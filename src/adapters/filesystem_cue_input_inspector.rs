@@ -39,6 +39,22 @@ impl CueInputInspector for FilesystemCueInputInspector {
         .await
         .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
     }
+
+    async fn filter_cue_files_for_audio(
+        &self,
+        cue_files: Vec<PathBuf>,
+        audio_path: &Path,
+    ) -> Result<Vec<PathBuf>> {
+        let audio_path = audio_path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            Ok(cue_files
+                .into_iter()
+                .filter(|cue_path| cue_references_audio_file_sync(cue_path, &audio_path))
+                .collect())
+        })
+        .await
+        .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
 }
 
 fn snapshot_inputs_sync(cue_path: &Path) -> Result<CueInputSnapshot> {

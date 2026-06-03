@@ -94,6 +94,22 @@ pub trait CueInputInspector {
     async fn file_size(&self, path: &Path) -> Result<Option<i64>>;
     async fn snapshot_inputs(&self, cue_path: &Path) -> Result<CueInputSnapshot>;
     async fn cue_references_audio_file(&self, cue_path: &Path, audio_path: &Path) -> Result<bool>;
+    async fn filter_cue_files_for_audio(
+        &self,
+        cue_files: Vec<PathBuf>,
+        audio_path: &Path,
+    ) -> Result<Vec<PathBuf>> {
+        let mut matching = Vec::new();
+        for cue_path in cue_files {
+            if self
+                .cue_references_audio_file(&cue_path, audio_path)
+                .await?
+            {
+                matching.push(cue_path);
+            }
+        }
+        Ok(matching)
+    }
 }
 
 pub trait CueSplitter {
