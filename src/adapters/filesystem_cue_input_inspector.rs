@@ -106,9 +106,10 @@ fn cue_references_audio_file_sync(cue_path: &Path, audio_path: &Path) -> bool {
 }
 
 fn existing_audio_input(path: PathBuf) -> Option<CueReferencedAudioInput> {
-    path.exists().then(|| CueReferencedAudioInput {
-        path: path.clone(),
-        size_bytes: file_size(&path),
+    let metadata = fs::metadata(&path).ok()?;
+    Some(CueReferencedAudioInput {
+        path,
+        size_bytes: i64::try_from(metadata.len()).ok(),
     })
 }
 
