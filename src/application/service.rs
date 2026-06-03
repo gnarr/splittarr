@@ -193,6 +193,12 @@ mod tests {
     struct FakeInspector;
 
     impl CueInputInspector for FakeInspector {
+        async fn file_size(&self, path: &Path) -> anyhow::Result<Option<i64>> {
+            Ok(fs::metadata(path)
+                .ok()
+                .and_then(|metadata| i64::try_from(metadata.len()).ok()))
+        }
+
         async fn snapshot_inputs(&self, cue_path: &Path) -> anyhow::Result<CueInputSnapshot> {
             Ok(CueInputSnapshot {
                 cue_size_bytes: fs::metadata(cue_path)

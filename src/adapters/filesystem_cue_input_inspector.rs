@@ -16,6 +16,13 @@ impl FilesystemCueInputInspector {
 }
 
 impl CueInputInspector for FilesystemCueInputInspector {
+    async fn file_size(&self, path: &Path) -> Result<Option<i64>> {
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || Ok(file_size(&path)))
+            .await
+            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
+
     async fn snapshot_inputs(&self, cue_path: &Path) -> Result<CueInputSnapshot> {
         let cue_path = cue_path.to_path_buf();
         tokio::task::spawn_blocking(move || snapshot_inputs_sync(&cue_path))
