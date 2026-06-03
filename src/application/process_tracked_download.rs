@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
@@ -99,7 +98,7 @@ where
 
         match splitter.split_cue(&cue_path).await {
             Ok(result) => {
-                store_split_result(store, &cue_sheet, result).await?;
+                store_split_result(store, inspector, &cue_sheet, result).await?;
             }
             Err(err) => {
                 all_cues_complete = false;
@@ -131,8 +130,9 @@ where
     Ok(())
 }
 
-async fn store_split_result<S: DownloadStore>(
+async fn store_split_result<S: DownloadStore, I: CueInputInspector>(
     store: &S,
+    inspector: &I,
     cue_sheet: &CueSheet,
     result: SplitOutcome,
 ) -> Result<()> {
@@ -140,14 +140,13 @@ async fn store_split_result<S: DownloadStore>(
         SplitStatus::Split => CueSheetStatus::Split,
         SplitStatus::Skipped => CueSheetStatus::Skipped,
     };
-    let tracks = result
-        .tracks
-        .iter()
-        .map(|path| RecordedTrack {
+    let mut tracks = Vec::with_capacity(result.tracks.len());
+    for path in &result.tracks {
+        tracks.push(RecordedTrack {
             path: path.to_string_lossy().to_string(),
-            size_bytes: file_size(path),
-        })
-        .collect::<Vec<_>>();
+            size_bytes: inspector.file_size(path).await?,
+        });
+    }
     store
         .record_cue_result(cue_sheet, status, result.message.as_deref(), &tracks)
         .await
@@ -184,12 +183,6 @@ async fn snapshot_input_files<S: DownloadStore, I: CueInputInspector>(
     }
 
     Ok(())
-}
-
-fn file_size(path: &Path) -> Option<i64> {
-    fs::metadata(path)
-        .ok()
-        .and_then(|metadata| i64::try_from(metadata.len()).ok())
 }
 
 fn scan_root_for(output_path: &Path) -> Result<PathBuf> {
@@ -381,6 +374,12 @@ mod tests {
     }
 
     impl CueInputInspector for FakeInspector {
+        async fn file_size(&self, path: &Path) -> Result<Option<i64>> {
+            Ok(fs::metadata(path)
+                .ok()
+                .and_then(|metadata| i64::try_from(metadata.len()).ok()))
+        }
+
         async fn snapshot_inputs(&self, cue_path: &Path) -> Result<CueInputSnapshot> {
             let cue_size_bytes = fs::metadata(cue_path)
                 .ok()
