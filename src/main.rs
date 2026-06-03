@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use crate::adapters::filesystem_cleanup::FilesystemTrackCleanup;
+use crate::adapters::filesystem_cue_input_inspector::FilesystemCueInputInspector;
 use crate::adapters::filesystem_cue_scanner::FilesystemCueScanner;
 use crate::adapters::lidarr_api::LidarrQueueSource;
 use crate::adapters::shnsplit_splitter::ShnsplitCueSplitter;
@@ -24,6 +25,7 @@ async fn main() -> Result<()> {
         SqliteDownloadStore::open(&settings.data_dir).context("initialize Splittarr database")?;
     let web_store = download_store.clone();
     let cue_scanner = FilesystemCueScanner::new();
+    let cue_input_inspector = FilesystemCueInputInspector::new();
     let cue_splitter = ShnsplitCueSplitter::new(
         settings.cue.strict,
         settings.shnsplit.path.clone(),
@@ -35,6 +37,7 @@ async fn main() -> Result<()> {
         queue_source,
         download_store,
         cue_scanner,
+        cue_input_inspector,
         cue_splitter,
         track_cleanup,
         settings.check_frequency_seconds,

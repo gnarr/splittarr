@@ -2,10 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-use rcue::parser::parse_from_file;
-use tokio::task;
 
-use crate::application::ports::{CueScanner, CueSplitter, DownloadStore};
+use crate::application::ports::{CueInputInspector, CueScanner, CueSplitter, DownloadStore};
 use crate::domain::{
     CueSheet, CueSheetStatus, FailedImportCandidate, InputFileKind, RecordedTrack, SplitOutcome,
     SplitStatus, TrackedDownload,
@@ -43,15 +41,17 @@ pub async fn register_failed_imports<S: DownloadStore>(
     Ok(())
 }
 
-pub async fn process_tracked_download<S, C, P>(
+pub async fn process_tracked_download<S, C, I, P>(
     store: &S,
     scanner: &C,
+    inspector: &I,
     splitter: &P,
     download: TrackedDownload,
 ) -> Result<()>
 where
     S: DownloadStore,
     C: CueScanner,
+    I: CueInputInspector,
     P: CueSplitter,
 {
     store
@@ -62,7 +62,8 @@ where
     let mut scan = scanner.find_cue_sheets(&scan_root).await?;
 
     if output_path.is_file() {
-        scan.cue_files = filter_cue_files_for_audio(scan.cue_files, output_path.clone()).await?;
+        scan.cue_files =
+            filter_cue_files_for_audio(inspector, scan.cue_files, &output_path).await?;
     }
 
     for error in &scan.errors {
@@ -83,7 +84,14 @@ where
         let cue_sheet = store
             .get_or_create_cue_sheet(&download.download_id, &cue_path)
             .await?;
-        snapshot_input_files(store, &download.download_id, &cue_sheet, &cue_path).await?;
+        snapshot_input_files(
+            store,
+            inspector,
+            &download.download_id,
+            &cue_sheet,
+            &cue_path,
+        )
+        .await?;
 
         if cue_sheet.status.is_terminal_success() {
             continue;
@@ -145,13 +153,14 @@ async fn store_split_result<S: DownloadStore>(
         .await
 }
 
-async fn snapshot_input_files<S: DownloadStore>(
+async fn snapshot_input_files<S: DownloadStore, I: CueInputInspector>(
     store: &S,
+    inspector: &I,
     download_id: &str,
     cue_sheet: &CueSheet,
     cue_path: &Path,
 ) -> Result<()> {
-    let snapshot = snapshot_input_file_details(cue_path.to_path_buf()).await?;
+    let snapshot = inspector.snapshot_inputs(cue_path).await?;
     store
         .record_input_file(
             download_id,
@@ -177,57 +186,6 @@ async fn snapshot_input_files<S: DownloadStore>(
     Ok(())
 }
 
-struct SnapshotInputDetails {
-    cue_size_bytes: Option<i64>,
-    audio_inputs: Vec<SnapshotAudioInput>,
-}
-
-struct SnapshotAudioInput {
-    path: PathBuf,
-    size_bytes: Option<i64>,
-}
-
-async fn snapshot_input_file_details(cue_path: PathBuf) -> Result<SnapshotInputDetails> {
-    task::spawn_blocking(move || snapshot_input_file_details_sync(&cue_path))
-        .await
-        .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
-}
-
-fn snapshot_input_file_details_sync(cue_path: &Path) -> Result<SnapshotInputDetails> {
-    let cue_size_bytes = file_size(cue_path);
-    let cue_path_str = cue_path.to_string_lossy();
-    let cue = match parse_from_file(&cue_path_str, false) {
-        Ok(cue) => cue,
-        Err(err) => {
-            eprintln!(
-                "Unable to parse cue file for input snapshot {}: {err}",
-                cue_path.display()
-            );
-            return Ok(SnapshotInputDetails {
-                cue_size_bytes,
-                audio_inputs: Vec::new(),
-            });
-        }
-    };
-    let cue_dir = cue_path.parent().unwrap_or_else(|| Path::new("."));
-    let audio_inputs = cue
-        .files
-        .iter()
-        .map(|file| cue_dir.join(&file.file))
-        .filter_map(|path| {
-            path.exists().then(|| SnapshotAudioInput {
-                size_bytes: file_size(&path),
-                path,
-            })
-        })
-        .collect();
-
-    Ok(SnapshotInputDetails {
-        cue_size_bytes,
-        audio_inputs,
-    })
-}
-
 fn file_size(path: &Path) -> Option<i64> {
     fs::metadata(path)
         .ok()
@@ -249,37 +207,21 @@ fn scan_root_for(output_path: &Path) -> Result<PathBuf> {
     Ok(output_path.to_path_buf())
 }
 
-fn cue_references_audio_file(cue_path: &Path, audio_path: &Path) -> bool {
-    let cue = match parse_from_file(&cue_path.to_string_lossy(), false) {
-        Ok(cue) => cue,
-        Err(err) => {
-            eprintln!(
-                "Unable to parse cue file while matching audio {}: {err}",
-                cue_path.display()
-            );
-            return false;
-        }
-    };
-    let cue_dir = cue_path.parent().unwrap_or_else(|| Path::new("."));
-
-    cue.files
-        .iter()
-        .map(|file| cue_dir.join(&file.file))
-        .any(|candidate| candidate == audio_path)
-}
-
-async fn filter_cue_files_for_audio(
+async fn filter_cue_files_for_audio<I: CueInputInspector>(
+    inspector: &I,
     cue_files: Vec<PathBuf>,
-    audio_path: PathBuf,
+    audio_path: &Path,
 ) -> Result<Vec<PathBuf>> {
-    task::spawn_blocking(move || {
-        Ok(cue_files
-            .into_iter()
-            .filter(|cue_path| cue_references_audio_file(cue_path, &audio_path))
-            .collect())
-    })
-    .await
-    .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    let mut matching = Vec::new();
+    for cue_path in cue_files {
+        if inspector
+            .cue_references_audio_file(&cue_path, audio_path)
+            .await?
+        {
+            matching.push(cue_path);
+        }
+    }
+    Ok(matching)
 }
 
 #[cfg(test)]
@@ -291,8 +233,11 @@ mod tests {
     use anyhow::Result;
     use tempfile::tempdir;
 
-    use super::{cue_references_audio_file, process_tracked_download};
-    use crate::application::ports::{CueScanner, CueSplitter, DownloadStore};
+    use super::process_tracked_download;
+    use crate::application::ports::{
+        CueInputInspector, CueInputSnapshot, CueReferencedAudioInput, CueScanner, CueSplitter,
+        DownloadStore,
+    };
     use crate::domain::{
         CueSheet, CueSheetStatus, DiscoveredCueSheets, InputFileKind, RecordedTrack, SplitOutcome,
         SplitStatus, TrackCleanupStatus, TrackedDownload,
@@ -431,6 +376,43 @@ mod tests {
         }
     }
 
+    struct FakeInspector {
+        matches: Mutex<Vec<(PathBuf, PathBuf)>>,
+    }
+
+    impl CueInputInspector for FakeInspector {
+        async fn snapshot_inputs(&self, cue_path: &Path) -> Result<CueInputSnapshot> {
+            let cue_size_bytes = fs::metadata(cue_path)
+                .ok()
+                .and_then(|metadata| i64::try_from(metadata.len()).ok());
+            let audio_path = cue_path.with_extension("flac");
+            let audio_inputs = if audio_path.exists() {
+                vec![CueReferencedAudioInput {
+                    path: audio_path,
+                    size_bytes: Some(5),
+                }]
+            } else {
+                Vec::new()
+            };
+            Ok(CueInputSnapshot {
+                cue_size_bytes,
+                audio_inputs,
+            })
+        }
+
+        async fn cue_references_audio_file(
+            &self,
+            cue_path: &Path,
+            audio_path: &Path,
+        ) -> Result<bool> {
+            self.matches
+                .lock()
+                .unwrap()
+                .push((cue_path.to_path_buf(), audio_path.to_path_buf()));
+            Ok(cue_path.file_stem() == audio_path.file_stem())
+        }
+    }
+
     struct FakeSplitter {
         calls: Mutex<Vec<PathBuf>>,
     }
@@ -463,6 +445,9 @@ mod tests {
             roots: Mutex::new(Vec::new()),
             cue_files: vec![cue_path.clone()],
         };
+        let inspector = FakeInspector {
+            matches: Mutex::new(Vec::new()),
+        };
         let splitter = FakeSplitter {
             calls: Mutex::new(Vec::new()),
         };
@@ -474,7 +459,7 @@ mod tests {
             "importFailed".into(),
         );
 
-        process_tracked_download(&store, &scanner, &splitter, download)
+        process_tracked_download(&store, &scanner, &inspector, &splitter, download)
             .await
             .unwrap();
 
@@ -507,6 +492,9 @@ mod tests {
             roots: Mutex::new(Vec::new()),
             cue_files: vec![cue_path],
         };
+        let inspector = FakeInspector {
+            matches: Mutex::new(Vec::new()),
+        };
         let splitter = FakeSplitter {
             calls: Mutex::new(Vec::new()),
         };
@@ -518,7 +506,7 @@ mod tests {
             "importFailed".into(),
         );
 
-        process_tracked_download(&store, &scanner, &splitter, download)
+        process_tracked_download(&store, &scanner, &inspector, &splitter, download)
             .await
             .unwrap();
 
@@ -554,6 +542,9 @@ mod tests {
             roots: Mutex::new(Vec::new()),
             cue_files: vec![other_cue, target_cue.clone()],
         };
+        let inspector = FakeInspector {
+            matches: Mutex::new(Vec::new()),
+        };
         let splitter = FakeSplitter {
             calls: Mutex::new(Vec::new()),
         };
@@ -565,28 +556,11 @@ mod tests {
             "importFailed".into(),
         );
 
-        process_tracked_download(&store, &scanner, &splitter, download)
+        process_tracked_download(&store, &scanner, &inspector, &splitter, download)
             .await
             .unwrap();
 
         assert_eq!(splitter.calls.lock().unwrap().as_slice(), &[target_cue]);
-    }
-
-    #[test]
-    fn cue_matching_checks_exact_referenced_audio_file() {
-        let tmp = tempdir().unwrap();
-        let target_audio = tmp.path().join("target.flac");
-        let target_cue = tmp.path().join("target.cue");
-        let other_audio = tmp.path().join("other.flac");
-        fs::write(&target_audio, b"audio").unwrap();
-        fs::write(
-            &target_cue,
-            "FILE \"target.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:00\n",
-        )
-        .unwrap();
-
-        assert!(cue_references_audio_file(&target_cue, &target_audio));
-        assert!(!cue_references_audio_file(&target_cue, &other_audio));
     }
 
     #[tokio::test]
@@ -600,6 +574,9 @@ mod tests {
             roots: Mutex::new(Vec::new()),
             cue_files: vec![cue_path.clone()],
         };
+        let inspector = FakeInspector {
+            matches: Mutex::new(Vec::new()),
+        };
         let splitter = FakeSplitter {
             calls: Mutex::new(Vec::new()),
         };
@@ -611,11 +588,14 @@ mod tests {
             "importFailed".into(),
         );
 
-        process_tracked_download(&store, &scanner, &splitter, download)
+        process_tracked_download(&store, &scanner, &inspector, &splitter, download)
             .await
             .unwrap();
 
-        assert_eq!(splitter.calls.lock().unwrap().as_slice(), &[cue_path.clone()]);
+        assert_eq!(
+            splitter.calls.lock().unwrap().as_slice(),
+            &[cue_path.clone()]
+        );
         assert_eq!(
             store.recorded_input_files.lock().unwrap().as_slice(),
             &[(cue_path.to_string_lossy().to_string(), InputFileKind::Cue)]
