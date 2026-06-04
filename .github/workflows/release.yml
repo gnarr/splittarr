@@ -194,7 +194,7 @@ jobs:
       - name: Restore cargo-edit
         id: cargo_edit_cache
         if: steps.release_input.outputs.mode == 'auto'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/cargo-set-version
           key: cargo-edit-${{ runner.os }}-${{ runner.arch }}-${{ env.CARGO_EDIT_VERSION }}
@@ -341,7 +341,7 @@ jobs:
 
       - name: Upload release notes
         if: steps.release.outputs.should_publish == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-notes
           path: ${{ steps.release_notes.outputs.notes_path }}
@@ -447,7 +447,7 @@ jobs:
           write_digest ghcr "$GHCR_DIGEST" "$GHCR_METADATA"
 
       - name: Upload image digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ runner.temp }}/digests/**
