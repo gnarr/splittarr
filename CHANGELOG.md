@@ -1,6 +1,16 @@
 # Changelog
 
 - - -
+## [v0.3.2](https://github.com/gnarr/splittarr/compare/db5d962e3ff9822d6ef6d520f9d86f9fb6f840a0..v0.3.2) - 2026-06-12
+#### Bug Fixes
+- (**shnsplit**) preserve non-utf8 track paths - ([62affca](https://github.com/gnarr/splittarr/commit/62affcad48c2b2b2f9afe48e98990ca4d5a8b634)) - Gunnar Cortes
+#### Refactoring
+- (**sqlite**) move db enum mappings out of domain - ([e02cb61](https://github.com/gnarr/splittarr/commit/e02cb614f13702e02f2126cb9a299d83affa4413)) - Gunnar Cortes
+- (**web**) use async read store port - ([fa6ddfc](https://github.com/gnarr/splittarr/commit/fa6ddfc779f5429756f5e4fc9077c159cbcbf91e)) - Gunnar Cortes
+- (**web**) decouple web ui read store - ([db5d962](https://github.com/gnarr/splittarr/commit/db5d962e3ff9822d6ef6d520f9d86f9fb6f840a0)) - Gunnar Cortes
+
+- - -
+
 ## [v0.3.1](https://github.com/gnarr/splittarr/compare/7b41c14172402ad75bfe40cb5e2587dd8e087145..v0.3.1) - 2026-06-12
 #### Bug Fixes
 - (**processing**) log split error chains - ([f751a1b](https://github.com/gnarr/splittarr/commit/f751a1b294de505a24a35c0b980467c1e84af8b6)) - Gunnar Cortes
