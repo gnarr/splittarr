@@ -1,6 +1,22 @@
 # Changelog
 
 - - -
+## [v0.3.1](https://github.com/gnarr/splittarr/compare/7b41c14172402ad75bfe40cb5e2587dd8e087145..v0.3.1) - 2026-06-12
+#### Bug Fixes
+- (**processing**) log split error chains - ([f751a1b](https://github.com/gnarr/splittarr/commit/f751a1b294de505a24a35c0b980467c1e84af8b6)) - Gunnar Cortes
+- (**processing**) log split failures - ([add86e3](https://github.com/gnarr/splittarr/commit/add86e369573d28a1f3be8e595a3801f690c4205)) - Gunnar Cortes
+#### Continuous Integration
+- bump cache and upload-artifact versions - ([0894de2](https://github.com/gnarr/splittarr/commit/0894de20e2cbe445fff04331e77076226f20875f)) - Gunnar Cortes
+#### Refactoring
+- (**adapter**) simplify blocking wrapper results - ([a114ba0](https://github.com/gnarr/splittarr/commit/a114ba029e049ae3bbe72f369000aab8e609017b)) - Gunnar Cortes
+- (**adapter**) share cue filter matching helper - ([2264e10](https://github.com/gnarr/splittarr/commit/2264e100e79aa41ef991bafa674db0d06379671c)) - Gunnar Cortes
+- (**adapter**) avoid duplicate audio input metadata lookups - ([8c38cbd](https://github.com/gnarr/splittarr/commit/8c38cbd90fbabc0d107c4315ddb1deb0f961c41d)) - Gunnar Cortes
+- (**application**) batch cue file filtering behind inspector - ([cf8f671](https://github.com/gnarr/splittarr/commit/cf8f6714ff3dd4b486f7d5b7a0d94786714b4b0c)) - Gunnar Cortes
+- (**application**) move track file size lookup behind cue inspector - ([3d8f57c](https://github.com/gnarr/splittarr/commit/3d8f57cc7827d241e9b066312d675e6925b9c8d5)) - Gunnar Cortes
+- (**application**) extract cue input inspector - ([7b41c14](https://github.com/gnarr/splittarr/commit/7b41c14172402ad75bfe40cb5e2587dd8e087145)) - Gunnar Cortes
+
+- - -
+
 ## [v0.3.0](https://github.com/gnarr/splittarr/compare/9123e413e4a036f917435821dcb8f69a3b0dfc09..v0.3.0) - 2026-06-02
 #### Features
 - (**downloads**) add persistent history ui - ([b698edc](https://github.com/gnarr/splittarr/commit/b698edc65683b6319fb75a552636e56b13675f2c)) - Gunnar Cortes
