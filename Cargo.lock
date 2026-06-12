@@ -1559,6 +1559,7 @@ name = "splittarr"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "chrono",
  "clap",

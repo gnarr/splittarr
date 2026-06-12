@@ -1,7 +1,7 @@
-use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use async_trait::async_trait;
 
 use crate::domain::{
     CueSheet, CueSheetStatus, DiscoveredCueSheets, DownloadLifecycleState, InputFileKind,
@@ -26,16 +26,11 @@ pub struct DownloadHistoryRow {
     pub generated_track_count: usize,
 }
 
+#[async_trait]
 pub trait DownloadReadStore {
-    fn load_download_rows(&self) -> impl Future<Output = Result<Vec<DownloadHistoryRow>>> + Send;
-    fn load_download_row(
-        &self,
-        download_id: &str,
-    ) -> impl Future<Output = Result<Option<DownloadHistoryRow>>> + Send;
-    fn get_tracked_download(
-        &self,
-        download_id: &str,
-    ) -> impl Future<Output = Result<Option<TrackedDownload>>> + Send;
+    async fn load_download_rows(&self) -> Result<Vec<DownloadHistoryRow>>;
+    async fn load_download_row(&self, download_id: &str) -> Result<Option<DownloadHistoryRow>>;
+    async fn get_tracked_download(&self, download_id: &str) -> Result<Option<TrackedDownload>>;
 }
 
 pub trait DownloadStore {
