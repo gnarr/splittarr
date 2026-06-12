@@ -6,8 +6,7 @@ use chrono::prelude::*;
 use crate::application::cleanup_processed_download::cleanup_processed_download;
 use crate::application::monitor_download_queue::classify_downloads;
 use crate::application::ports::{
-    CueInputInspector, CueScanner, CueSplitter,
-    DownloadStore, QueueSource, TrackCleanup,
+    CueInputInspector, CueScanner, CueSplitter, DownloadStore, QueueSource, TrackCleanup,
 };
 use crate::application::process_tracked_download::{
     process_tracked_download, register_failed_imports,

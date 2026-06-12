@@ -7,29 +7,31 @@ use axum::{
 };
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
-use crate::adapters::sqlite_download_store::{DownloadRow, SqliteDownloadStore};
-use crate::application::ports::DownloadStore;
+use crate::application::ports::{DownloadHistoryRow, DownloadReadStore};
 use crate::domain::{
     CueSheet, CueSheetStatus, DownloadLifecycleState, GeneratedTrack, InputFile, InputFileKind,
     TrackCleanupStatus, TrackedDownload,
 };
 
 #[derive(Clone)]
-struct WebState {
-    store: SqliteDownloadStore,
+struct WebState<S> {
+    store: S,
 }
 
-pub fn router(store: SqliteDownloadStore) -> Router {
+pub fn router<S>(store: S) -> Router
+where
+    S: DownloadReadStore + Clone + Send + Sync + 'static,
+{
     Router::new()
-        .route("/", get(index))
+        .route("/", get(index::<S>))
         .route("/healthz", get(healthz))
-        .route("/downloads/{download_id}", get(download_detail))
+        .route("/downloads/{download_id}", get(download_detail::<S>))
         .route(
             "/downloads/{download_id}/content",
-            get(download_detail_content),
+            get(download_detail_content::<S>),
         )
-        .route("/downloads/{download_id}/row", get(download_row_route))
-        .route("/downloads/rows", get(download_rows_route))
+        .route("/downloads/{download_id}/row", get(download_row_route::<S>))
+        .route("/downloads/rows", get(download_rows_route::<S>))
         .with_state(WebState { store })
 }
 
@@ -37,7 +39,10 @@ async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
-async fn index(State(state): State<WebState>) -> Response {
+async fn index<S>(State(state): State<WebState<S>>) -> Response
+where
+    S: DownloadReadStore,
+{
     match state.store.load_download_rows().await {
         Ok(downloads) => Html(page(
             "Splittarr",
@@ -79,10 +84,13 @@ async fn index(State(state): State<WebState>) -> Response {
     }
 }
 
-async fn download_row_route(
-    State(state): State<WebState>,
+async fn download_row_route<S>(
+    State(state): State<WebState<S>>,
     Path(download_id): Path<String>,
-) -> impl IntoResponse {
+) -> impl IntoResponse
+where
+    S: DownloadReadStore,
+{
     match state.store.load_download_row(&download_id).await {
         Ok(Some(download)) => download_row(&download).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "download not found").into_response(),
@@ -94,7 +102,10 @@ async fn download_row_route(
     }
 }
 
-async fn download_rows_route(State(state): State<WebState>) -> impl IntoResponse {
+async fn download_rows_route<S>(State(state): State<WebState<S>>) -> impl IntoResponse
+where
+    S: DownloadReadStore,
+{
     match state.store.load_download_rows().await {
         Ok(downloads) => download_rows(&downloads).into_response(),
         Err(error) => (
@@ -105,10 +116,13 @@ async fn download_rows_route(State(state): State<WebState>) -> impl IntoResponse
     }
 }
 
-async fn download_detail(
-    State(state): State<WebState>,
+async fn download_detail<S>(
+    State(state): State<WebState<S>>,
     Path(download_id): Path<String>,
-) -> Response {
+) -> Response
+where
+    S: DownloadReadStore,
+{
     match state.store.get_tracked_download(&download_id).await {
         Ok(Some(download)) => Html(page(
             &download.title,
@@ -130,10 +144,13 @@ async fn download_detail(
     }
 }
 
-async fn download_detail_content(
-    State(state): State<WebState>,
+async fn download_detail_content<S>(
+    State(state): State<WebState<S>>,
     Path(download_id): Path<String>,
-) -> impl IntoResponse {
+) -> impl IntoResponse
+where
+    S: DownloadReadStore,
+{
     match state.store.get_tracked_download(&download_id).await {
         Ok(Some(download)) => download_content(&download).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "download not found").into_response(),
@@ -163,7 +180,7 @@ fn page(title: &str, body: Markup) -> String {
     .into_string()
 }
 
-fn download_row(download: &DownloadRow) -> Markup {
+fn download_row(download: &DownloadHistoryRow) -> Markup {
     html! {
         tr id=(format!("download-row-{}", download.download_id)) data-download-id=(&download.download_id) {
             td {
@@ -181,7 +198,7 @@ fn download_row(download: &DownloadRow) -> Markup {
     }
 }
 
-fn download_rows(downloads: &[DownloadRow]) -> Markup {
+fn download_rows(downloads: &[DownloadHistoryRow]) -> Markup {
     html! {
         @for download in downloads {
             (download_row(download))
@@ -514,14 +531,49 @@ mod tests {
     use tower::ServiceExt;
 
     use super::router;
-    use crate::adapters::sqlite_download_store::SqliteDownloadStore;
-    use crate::application::ports::DownloadStore;
-    use crate::domain::{CueSheetStatus, InputFileKind, RecordedTrack, TrackedDownload};
+    use crate::application::ports::{DownloadHistoryRow, DownloadReadStore};
+    use crate::domain::{
+        CueSheet, CueSheetStatus, DownloadLifecycleState, GeneratedTrack, InputFile, InputFileKind,
+        TrackCleanupStatus, TrackedDownload,
+    };
+
+    #[derive(Clone, Default)]
+    struct FakeReadStore {
+        rows: Vec<DownloadHistoryRow>,
+        detail: Option<TrackedDownload>,
+    }
+
+    impl DownloadReadStore for FakeReadStore {
+        async fn load_download_rows(&self) -> anyhow::Result<Vec<DownloadHistoryRow>> {
+            Ok(self.rows.clone())
+        }
+
+        async fn load_download_row(
+            &self,
+            download_id: &str,
+        ) -> anyhow::Result<Option<DownloadHistoryRow>> {
+            Ok(self
+                .rows
+                .iter()
+                .find(|row| row.download_id == download_id)
+                .cloned())
+        }
+
+        async fn get_tracked_download(
+            &self,
+            download_id: &str,
+        ) -> anyhow::Result<Option<TrackedDownload>> {
+            Ok(self
+                .detail
+                .as_ref()
+                .filter(|download| download.download_id == download_id)
+                .cloned())
+        }
+    }
 
     #[tokio::test]
-    async fn index_renders_empty_state() {
-        let tmp = tempfile::tempdir().unwrap();
-        let app = router(SqliteDownloadStore::open(tmp.path()).unwrap());
+    async fn index_renders_empty_state_with_fake_read_store() {
+        let app = router(FakeReadStore::default());
 
         let response = app
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
@@ -536,45 +588,45 @@ mod tests {
 
     #[tokio::test]
     async fn detail_renders_recorded_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = SqliteDownloadStore::open(tmp.path()).unwrap();
-        let download = TrackedDownload::pending(
+        let mut download = TrackedDownload::pending(
             "abc".into(),
             "Album".into(),
             "completed".into(),
             "/downloads/album".into(),
             "importFailed".into(),
         );
-        store.upsert_tracked_download(&download).await.unwrap();
-        store.mark_download_processing("abc").await.unwrap();
-        let cue = store
-            .get_or_create_cue_sheet("abc", std::path::Path::new("/downloads/album/album.cue"))
-            .await
-            .unwrap();
-        store
-            .record_input_file(
-                "abc",
-                Some(&cue.id),
-                std::path::Path::new("/downloads/album/album.cue"),
-                InputFileKind::Cue,
-                Some(12),
-            )
-            .await
-            .unwrap();
-        store
-            .record_cue_result(
-                &cue,
-                CueSheetStatus::Split,
-                None,
-                &[RecordedTrack {
-                    path: "/downloads/album/01.flac".into(),
-                    size_bytes: Some(64),
-                }],
-            )
-            .await
-            .unwrap();
+        download.input_files = vec![InputFile {
+            id: "input-1".into(),
+            download_id: "abc".into(),
+            cue_sheet_id: Some("cue-1".into()),
+            path: "/downloads/album/album.cue".into(),
+            kind: InputFileKind::Cue,
+            size_bytes: Some(12),
+            captured_at: "2026-06-12 12:00:00".into(),
+        }];
+        download.cue_sheets = vec![CueSheet {
+            id: "cue-1".into(),
+            download_id: "abc".into(),
+            path: "/downloads/album/album.cue".into(),
+            status: CueSheetStatus::Split,
+            message: None,
+            updated_at: "2026-06-12 12:00:00".into(),
+            tracks: vec![GeneratedTrack {
+                id: "track-1".into(),
+                cue_sheet_id: "cue-1".into(),
+                download_id: "abc".into(),
+                path: "/downloads/album/01.flac".into(),
+                size_bytes: Some(64),
+                cleanup_status: TrackCleanupStatus::Pending,
+                cleanup_message: None,
+                deleted_at: None,
+            }],
+        }];
 
-        let app = router(store);
+        let app = router(FakeReadStore {
+            detail: Some(download),
+            ..FakeReadStore::default()
+        });
         let response = app
             .oneshot(
                 Request::builder()
@@ -595,18 +647,20 @@ mod tests {
 
     #[tokio::test]
     async fn rows_endpoint_renders_all_rows_in_one_response() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = SqliteDownloadStore::open(tmp.path()).unwrap();
-        let download = TrackedDownload::pending(
-            "abc".into(),
-            "Album".into(),
-            "completed".into(),
-            "/downloads/album".into(),
-            "importFailed".into(),
-        );
-        store.upsert_tracked_download(&download).await.unwrap();
-
-        let app = router(store);
+        let app = router(FakeReadStore {
+            rows: vec![DownloadHistoryRow {
+                download_id: "abc".into(),
+                title: "Album".into(),
+                status: "completed".into(),
+                output_path: "/downloads/album".into(),
+                tracked_download_state: "importFailed".into(),
+                lifecycle_state: DownloadLifecycleState::Detected,
+                updated_at: "2026-06-12 12:00:00".into(),
+                completed_at: None,
+                generated_track_count: 0,
+            }],
+            detail: None,
+        });
         let response = app
             .oneshot(
                 Request::builder()

@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use rusqlite::{named_params, params, params_from_iter, Connection, OptionalExtension};
 use uuid::Uuid;
 
-use crate::application::ports::DownloadStore;
+use crate::application::ports::{DownloadHistoryRow, DownloadReadStore, DownloadStore};
 use crate::domain::{
     CueSheet, CueSheetStatus, DownloadLifecycleState, GeneratedTrack, InputFile, InputFileKind,
     RecordedTrack, TrackCleanupOutcome, TrackCleanupStatus, TrackedDownload,
@@ -15,19 +15,6 @@ use crate::domain::{
 #[derive(Debug, Clone)]
 pub struct SqliteDownloadStore {
     db_path: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DownloadRow {
-    pub download_id: String,
-    pub title: String,
-    pub status: String,
-    pub output_path: String,
-    pub tracked_download_state: String,
-    pub lifecycle_state: DownloadLifecycleState,
-    pub updated_at: String,
-    pub completed_at: Option<String>,
-    pub generated_track_count: usize,
 }
 
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -93,7 +80,7 @@ impl SqliteDownloadStore {
         Ok(downloads)
     }
 
-    fn load_download_rows_sync(&self) -> Result<Vec<DownloadRow>> {
+    fn load_download_rows_sync(&self) -> Result<Vec<DownloadHistoryRow>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             "SELECT d.download_id, d.title, d.status, d.output_path, d.tracked_download_state,
@@ -114,14 +101,7 @@ impl SqliteDownloadStore {
         Ok(download_rows)
     }
 
-    pub async fn load_download_rows(&self) -> Result<Vec<DownloadRow>> {
-        let store = self.clone();
-        tokio::task::spawn_blocking(move || store.load_download_rows_sync())
-            .await
-            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
-    }
-
-    fn load_download_row_sync(&self, download_id: &str) -> Result<Option<DownloadRow>> {
+    fn load_download_row_sync(&self, download_id: &str) -> Result<Option<DownloadHistoryRow>> {
         let conn = self.connect()?;
         Ok(conn
             .query_row(
@@ -137,14 +117,6 @@ impl SqliteDownloadStore {
                 map_download_history_row,
             )
             .optional()?)
-    }
-
-    pub async fn load_download_row(&self, download_id: &str) -> Result<Option<DownloadRow>> {
-        let store = self.clone();
-        let download_id = download_id.to_owned();
-        tokio::task::spawn_blocking(move || store.load_download_row_sync(&download_id))
-            .await
-            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
     }
 
     fn get_tracked_download_sync(&self, download_id: &str) -> Result<Option<TrackedDownload>> {
@@ -643,6 +615,31 @@ impl DownloadStore for SqliteDownloadStore {
     }
 }
 
+impl DownloadReadStore for SqliteDownloadStore {
+    async fn load_download_rows(&self) -> Result<Vec<DownloadHistoryRow>> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.load_download_rows_sync())
+            .await
+            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
+
+    async fn load_download_row(&self, download_id: &str) -> Result<Option<DownloadHistoryRow>> {
+        let store = self.clone();
+        let download_id = download_id.to_owned();
+        tokio::task::spawn_blocking(move || store.load_download_row_sync(&download_id))
+            .await
+            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
+
+    async fn get_tracked_download(&self, download_id: &str) -> Result<Option<TrackedDownload>> {
+        let store = self.clone();
+        let download_id = download_id.to_owned();
+        tokio::task::spawn_blocking(move || store.get_tracked_download_sync(&download_id))
+            .await
+            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
+}
+
 fn map_download_row(
     conn: &Connection,
     row: &rusqlite::Row<'_>,
@@ -673,8 +670,8 @@ fn map_download_row(
     })
 }
 
-fn map_download_history_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DownloadRow> {
-    Ok(DownloadRow {
+fn map_download_history_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DownloadHistoryRow> {
+    Ok(DownloadHistoryRow {
         download_id: row.get(0)?,
         title: row.get(1)?,
         status: row.get(2)?,
@@ -1191,7 +1188,8 @@ mod tests {
         );
 
         repo.upsert_tracked_download_sync(&download).unwrap();
-        repo.mark_download_awaiting_import_sync("download-1").unwrap();
+        repo.mark_download_awaiting_import_sync("download-1")
+            .unwrap();
 
         let conn = Connection::open(&repo.db_path).unwrap();
         conn.execute(
@@ -1203,7 +1201,8 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        repo.mark_download_awaiting_import_sync("download-1").unwrap();
+        repo.mark_download_awaiting_import_sync("download-1")
+            .unwrap();
 
         let stored = repo
             .get_tracked_download_sync("download-1")
@@ -1373,7 +1372,10 @@ mod tests {
             .query_row("PRAGMA busy_timeout", [], |row| row.get::<_, i64>(0))
             .unwrap();
 
-        assert_eq!(busy_timeout_ms, super::SQLITE_BUSY_TIMEOUT.as_millis() as i64);
+        assert_eq!(
+            busy_timeout_ms,
+            super::SQLITE_BUSY_TIMEOUT.as_millis() as i64
+        );
     }
 
     #[test]

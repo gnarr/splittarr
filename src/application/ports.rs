@@ -1,14 +1,41 @@
+use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
 use crate::domain::{
-    CueSheet, CueSheetStatus, DiscoveredCueSheets, InputFileKind, QueueSnapshot, RecordedTrack,
-    SplitOutcome, TrackCleanupOutcome, TrackCleanupStatus, TrackedDownload,
+    CueSheet, CueSheetStatus, DiscoveredCueSheets, DownloadLifecycleState, InputFileKind,
+    QueueSnapshot, RecordedTrack, SplitOutcome, TrackCleanupOutcome, TrackCleanupStatus,
+    TrackedDownload,
 };
 
 pub trait QueueSource {
     async fn queue_snapshot(&self) -> Result<QueueSnapshot>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadHistoryRow {
+    pub download_id: String,
+    pub title: String,
+    pub status: String,
+    pub output_path: String,
+    pub tracked_download_state: String,
+    pub lifecycle_state: DownloadLifecycleState,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+    pub generated_track_count: usize,
+}
+
+pub trait DownloadReadStore {
+    fn load_download_rows(&self) -> impl Future<Output = Result<Vec<DownloadHistoryRow>>> + Send;
+    fn load_download_row(
+        &self,
+        download_id: &str,
+    ) -> impl Future<Output = Result<Option<DownloadHistoryRow>>> + Send;
+    fn get_tracked_download(
+        &self,
+        download_id: &str,
+    ) -> impl Future<Output = Result<Option<TrackedDownload>>> + Send;
 }
 
 pub trait DownloadStore {
