@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use anyhow::{anyhow, Result};
 use rcue::parser::parse_from_file;
-use regex::Regex;
+use regex::bytes::Regex;
 
 use crate::application::ports::CueSplitter;
 use crate::domain::{SplitOutcome, SplitStatus};
@@ -101,19 +101,19 @@ impl ShnsplitCueSplitter {
             })?
         };
 
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         if !output.status.success() {
             let status = output.status.code().map_or_else(
                 || "terminated by signal".to_owned(),
                 |code| code.to_string(),
             );
+            let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow!(
                 "shnsplit failed for {} with status {status}: {stderr}",
                 cue_path.display()
             ));
         }
 
-        let mut tracks = parse_generated_tracks(cue_dir, &stderr);
+        let mut tracks = parse_generated_tracks(cue_dir, &output.stderr);
         if tracks.is_empty() {
             let files_after = snapshot_audio_files_best_effort(cue_dir, cue_path);
             tracks = detect_generated_tracks(&referenced_paths, &files_before, &files_after);
@@ -125,14 +125,21 @@ impl ShnsplitCueSplitter {
             ));
         }
 
-        for track in &tracks {
-            if !track.exists() {
-                return Err(anyhow!(
-                    "shnsplit reported output that does not exist for {}: {}",
-                    cue_path.display(),
-                    track.display()
-                ));
+        if tracks.iter().any(|track| !track.exists()) {
+            let files_after = snapshot_audio_files_best_effort(cue_dir, cue_path);
+            let detected_tracks =
+                detect_generated_tracks(&referenced_paths, &files_before, &files_after);
+            if !detected_tracks.is_empty() {
+                tracks = detected_tracks;
             }
+        }
+
+        if let Some(track) = tracks.iter().find(|track| !track.exists()) {
+            return Err(anyhow!(
+                "shnsplit reported output that does not exist for {}: {}",
+                cue_path.display(),
+                track.display()
+            ));
         }
 
         Ok(SplitOutcome {
@@ -143,14 +150,15 @@ impl ShnsplitCueSplitter {
     }
 }
 
-fn parse_generated_tracks(cue_dir: &Path, stderr: &str) -> Vec<PathBuf> {
+fn parse_generated_tracks(cue_dir: &Path, stderr: &[u8]) -> Vec<PathBuf> {
     let re = Regex::new(
         r"Splitting \[(?P<input_file>[^]]+)] \((?P<input_length>[^)]+)\) --> \[(?P<output_file>[^]]+)] \((?P<output_length>[^)]+)\) :",
     )
     .expect("generated-track regex must compile");
 
     re.captures_iter(stderr)
-        .map(|cap| PathBuf::from(&cap["output_file"]))
+        .filter_map(|cap| cap.name("output_file").map(|output| output.as_bytes()))
+        .map(path_from_shnsplit_bytes)
         .map(|path| {
             if path.is_absolute() {
                 path
@@ -159,6 +167,21 @@ fn parse_generated_tracks(cue_dir: &Path, stderr: &str) -> Vec<PathBuf> {
             }
         })
         .collect()
+}
+
+fn path_from_shnsplit_bytes(bytes: &[u8]) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        PathBuf::from(OsString::from_vec(bytes.to_vec()))
+    }
+
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+    }
 }
 
 fn decoder_args(referenced_paths: &[PathBuf]) -> Vec<&'static str> {
@@ -245,6 +268,10 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     use tempfile::tempdir;
@@ -313,9 +340,33 @@ exit 2
         let tmp = tempdir().unwrap();
         let stderr = "Splitting [album.flac] (0:01.00) --> [01 - Track.flac] (0:01.00) :";
 
-        let tracks = parse_generated_tracks(tmp.path(), stderr);
+        let tracks = parse_generated_tracks(tmp.path(), stderr.as_bytes());
 
         assert_eq!(tracks, vec![tmp.path().join("01 - Track.flac")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn splitter_preserves_non_utf8_track_paths_from_stderr() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_fixture_album(tmp.path(), true);
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            r#"name=$(printf 'Artist - Album - 01 - You\222re Lost.flac')
+printf 'track' > "$name"
+printf 'Splitting [album.flac] (0:01.00) --> [%s] (0:01.00) :\n' "$name" >&2
+exit 0
+"#,
+        );
+        let splitter = test_splitter(fake);
+        let expected = tmp.path().join(PathBuf::from(OsString::from_vec(
+            b"Artist - Album - 01 - You\x92re Lost.flac".to_vec(),
+        )));
+
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
+
+        assert_eq!(result.status, SplitStatus::Split);
+        assert_eq!(result.tracks, vec![expected]);
     }
 
     #[test]
