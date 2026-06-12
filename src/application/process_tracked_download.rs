@@ -106,7 +106,7 @@ where
                 all_cues_complete = false;
                 let message = err.to_string();
                 eprintln!(
-                    "Failed splitting cue for {} at {}: {message}",
+                    "Failed splitting cue for {} at {}: {err:#}",
                     download.title,
                     cue_path.display()
                 );
