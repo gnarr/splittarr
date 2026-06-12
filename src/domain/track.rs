@@ -30,23 +30,3 @@ pub struct TrackCleanupOutcome {
     pub status: TrackCleanupStatus,
     pub message: Option<String>,
 }
-
-impl TrackCleanupStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Deleted => "deleted",
-            Self::DeleteFailed => "delete_failed",
-            Self::Missing => "missing",
-        }
-    }
-
-    pub fn from_db(value: &str) -> Self {
-        match value {
-            "deleted" => Self::Deleted,
-            "delete_failed" => Self::DeleteFailed,
-            "missing" => Self::Missing,
-            _ => Self::Pending,
-        }
-    }
-}

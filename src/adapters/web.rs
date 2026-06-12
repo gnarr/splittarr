@@ -188,7 +188,7 @@ fn download_row(download: &DownloadHistoryRow) -> Markup {
                     (&download.title)
                 }
             }
-            td { span class=(lifecycle_class(&download.lifecycle_state)) { (download.lifecycle_state.as_str()) } }
+            td { span class=(lifecycle_class(&download.lifecycle_state)) { (lifecycle_label(&download.lifecycle_state)) } }
             td { (&download.status) " / " (&download.tracked_download_state) }
             td class="path" { (&download.output_path) }
             td { (download.generated_track_count) }
@@ -210,7 +210,7 @@ fn download_content(download: &TrackedDownload) -> Markup {
     html! {
         h1 { (&download.title) }
         section class="panel grid" {
-            div { strong { "Lifecycle" } span class=(lifecycle_class(&download.lifecycle_state)) { (download.lifecycle_state.as_str()) } }
+            div { strong { "Lifecycle" } span class=(lifecycle_class(&download.lifecycle_state)) { (lifecycle_label(&download.lifecycle_state)) } }
             div { strong { "Lidarr status" } span { (&download.status) } }
             div { strong { "Tracked state" } span { (&download.tracked_download_state) } }
             div { strong { "Generated tracks" } span { (download.generated_track_count()) } }
@@ -306,7 +306,7 @@ fn cue_card(cue: &CueSheet) -> Markup {
         article class="card" {
             h3 class="path" { (&cue.path) }
             p {
-                span class=(cue_status_class(cue.status)) { (cue.status.as_str()) }
+                span class=(cue_status_class(cue.status)) { (cue_status_label(cue.status)) }
                 " "
                 span class="muted" { (&cue.updated_at) }
             }
@@ -323,7 +323,7 @@ fn track_row(track: &GeneratedTrack) -> Markup {
             td class="path" { (&track.path) }
             td { (format_size(track.size_bytes)) }
             td {
-                span class=(cleanup_class(track.cleanup_status)) { (track.cleanup_status.as_str()) }
+                span class=(cleanup_class(track.cleanup_status)) { (cleanup_label(track.cleanup_status)) }
                 @if let Some(message) = &track.cleanup_message {
                     div class="muted" { (message) }
                 }
@@ -337,6 +337,35 @@ fn input_kind_label(kind: InputFileKind) -> &'static str {
     match kind {
         InputFileKind::Cue => "cue",
         InputFileKind::Audio => "audio",
+    }
+}
+
+fn lifecycle_label(state: &DownloadLifecycleState) -> &'static str {
+    match state {
+        DownloadLifecycleState::Detected => "detected",
+        DownloadLifecycleState::Processing => "processing",
+        DownloadLifecycleState::AwaitingImport => "awaiting_import",
+        DownloadLifecycleState::CleaningUp => "cleaning_up",
+        DownloadLifecycleState::Completed => "completed",
+        DownloadLifecycleState::Failed => "failed",
+    }
+}
+
+fn cue_status_label(status: CueSheetStatus) -> &'static str {
+    match status {
+        CueSheetStatus::Pending => "pending",
+        CueSheetStatus::Split => "split",
+        CueSheetStatus::Skipped => "skipped",
+        CueSheetStatus::Failed => "failed",
+    }
+}
+
+fn cleanup_label(status: TrackCleanupStatus) -> &'static str {
+    match status {
+        TrackCleanupStatus::Pending => "pending",
+        TrackCleanupStatus::Deleted => "deleted",
+        TrackCleanupStatus::DeleteFailed => "delete_failed",
+        TrackCleanupStatus::Missing => "missing",
     }
 }
 
