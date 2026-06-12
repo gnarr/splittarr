@@ -141,6 +141,7 @@ impl ShnsplitCueSplitter {
                 track.display()
             ));
         }
+        let tracks = normalize_generated_track_filenames(tracks)?;
 
         Ok(SplitOutcome {
             status: SplitStatus::Split,
@@ -181,6 +182,172 @@ fn path_from_shnsplit_bytes(bytes: &[u8]) -> PathBuf {
     #[cfg(not(unix))]
     {
         PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+    }
+}
+
+fn normalize_generated_track_filenames(tracks: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
+    tracks
+        .into_iter()
+        .map(normalize_generated_track_filename)
+        .collect()
+}
+
+fn normalize_generated_track_filename(path: PathBuf) -> Result<PathBuf> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow!("generated track path has no file name: {}", path.display()))?;
+    let sanitized = sanitize_file_name(file_name);
+    if sanitized.is_empty() {
+        return Err(anyhow!(
+            "generated track filename sanitized to an empty name: {}",
+            path.display()
+        ));
+    }
+
+    let Some(current_name) = file_name.to_str() else {
+        return rename_generated_track(path, sanitized);
+    };
+    if current_name == sanitized {
+        return Ok(path);
+    }
+    rename_generated_track(path, sanitized)
+}
+
+fn rename_generated_track(path: PathBuf, sanitized: String) -> Result<PathBuf> {
+    let target = path.with_file_name(sanitized);
+    if target == path {
+        return Ok(path);
+    }
+    if target.exists() {
+        return Err(anyhow!(
+            "sanitized generated track path already exists for {}: {}",
+            path.display(),
+            target.display()
+        ));
+    }
+    fs::rename(&path, &target).map_err(|err| {
+        anyhow!(
+            "failed to rename generated track {} to {}: {err}",
+            path.display(),
+            target.display()
+        )
+    })?;
+    Ok(target)
+}
+
+fn sanitize_file_name(file_name: &std::ffi::OsStr) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+
+        sanitize_file_name_bytes(file_name.as_bytes())
+    }
+
+    #[cfg(not(unix))]
+    {
+        sanitize_file_name_str(&file_name.to_string_lossy())
+    }
+}
+
+#[cfg(unix)]
+fn sanitize_file_name_bytes(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(value) => sanitize_file_name_str(value),
+        Err(_) => sanitize_file_name_lossy_bytes(bytes),
+    }
+}
+
+#[cfg(unix)]
+fn sanitize_file_name_lossy_bytes(bytes: &[u8]) -> String {
+    let mut sanitized = String::with_capacity(bytes.len());
+    let mut previous_was_underscore = false;
+    for byte in bytes {
+        match ascii_replacement_for_byte(*byte) {
+            ByteReplacement::Char(ch) => {
+                sanitized.push(ch);
+                previous_was_underscore = false;
+            }
+            ByteReplacement::Str(value) => {
+                sanitized.push_str(value);
+                previous_was_underscore = false;
+            }
+            ByteReplacement::Underscore => {
+                push_collapsed_underscore(&mut sanitized, &mut previous_was_underscore)
+            }
+        }
+    }
+    trim_sanitized_file_name(sanitized)
+}
+
+fn sanitize_file_name_str(value: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+    let mut previous_was_underscore = false;
+    for ch in value.chars() {
+        match ascii_replacement_for_char(ch) {
+            CharReplacement::Char(ch) => {
+                sanitized.push(ch);
+                previous_was_underscore = false;
+            }
+            CharReplacement::Str(value) => {
+                sanitized.push_str(value);
+                previous_was_underscore = false;
+            }
+            CharReplacement::Underscore => {
+                push_collapsed_underscore(&mut sanitized, &mut previous_was_underscore)
+            }
+        }
+    }
+    trim_sanitized_file_name(sanitized)
+}
+
+fn push_collapsed_underscore(value: &mut String, previous_was_underscore: &mut bool) {
+    if !*previous_was_underscore {
+        value.push('_');
+        *previous_was_underscore = true;
+    }
+}
+
+fn trim_sanitized_file_name(value: String) -> String {
+    value.trim_matches(|ch| ch == ' ' || ch == '_').to_owned()
+}
+
+#[cfg(unix)]
+enum ByteReplacement {
+    Char(char),
+    Str(&'static str),
+    Underscore,
+}
+
+#[cfg(unix)]
+fn ascii_replacement_for_byte(byte: u8) -> ByteReplacement {
+    match byte {
+        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b' ' | b'.' | b'-' | b'_' | b'\'' => {
+            ByteReplacement::Char(char::from(byte))
+        }
+        0x91 | 0x92 => ByteReplacement::Char('\''),
+        0x93 | 0x94 => ByteReplacement::Char('"'),
+        0x96 | 0x97 => ByteReplacement::Char('-'),
+        0x85 => ByteReplacement::Str("..."),
+        _ => ByteReplacement::Underscore,
+    }
+}
+
+enum CharReplacement {
+    Char(char),
+    Str(&'static str),
+    Underscore,
+}
+
+fn ascii_replacement_for_char(ch: char) -> CharReplacement {
+    match ch {
+        'A'..='Z' | 'a'..='z' | '0'..='9' | ' ' | '.' | '-' | '_' | '\'' => {
+            CharReplacement::Char(ch)
+        }
+        '\u{2018}' | '\u{2019}' => CharReplacement::Char('\''),
+        '\u{201C}' | '\u{201D}' => CharReplacement::Char('"'),
+        '\u{2013}' | '\u{2014}' => CharReplacement::Char('-'),
+        '\u{2026}' => CharReplacement::Str("..."),
+        _ => CharReplacement::Underscore,
     }
 }
 
@@ -277,7 +444,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        decoder_args, detect_generated_tracks, parse_generated_tracks,
+        decoder_args, detect_generated_tracks, parse_generated_tracks, sanitize_file_name_str,
         snapshot_audio_files_best_effort, ShnsplitCueSplitter,
     };
     use crate::domain::SplitStatus;
@@ -347,7 +514,7 @@ exit 2
 
     #[cfg(unix)]
     #[test]
-    fn splitter_preserves_non_utf8_track_paths_from_stderr() {
+    fn splitter_sanitizes_non_utf8_track_paths_from_stderr() {
         let tmp = tempdir().unwrap();
         let cue_path = write_fixture_album(tmp.path(), true);
         let fake = write_fake_shnsplit(
@@ -359,14 +526,60 @@ exit 0
 "#,
         );
         let splitter = test_splitter(fake);
-        let expected = tmp.path().join(PathBuf::from(OsString::from_vec(
+        let raw_path = tmp.path().join(PathBuf::from(OsString::from_vec(
             b"Artist - Album - 01 - You\x92re Lost.flac".to_vec(),
         )));
+        let expected = tmp.path().join("Artist - Album - 01 - You're Lost.flac");
 
         let result = splitter.split_cue_sync(&cue_path).unwrap();
 
         assert_eq!(result.status, SplitStatus::Split);
         assert_eq!(result.tracks, vec![expected]);
+        assert!(result.tracks[0].exists());
+        assert!(!raw_path.exists());
+    }
+
+    #[test]
+    fn sanitizes_unicode_punctuation_and_remaining_non_ascii() {
+        let sanitized = sanitize_file_name_str(
+            "Artist - Album - 02 - \u{201C}Cafe\u{201D}\u{2014}deja vu\u{2026}.flac",
+        );
+
+        assert_eq!(sanitized, "Artist - Album - 02 - \"Cafe\"-deja vu....flac");
+    }
+
+    #[test]
+    fn sanitizer_collapses_underscores_and_trims_edges() {
+        let sanitized = sanitize_file_name_str("  \u{00E9}\u{00E5} Track \u{266B}.flac  ");
+
+        assert_eq!(sanitized, "Track _.flac");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn splitter_fails_when_sanitized_track_path_collides() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_fixture_album(tmp.path(), true);
+        fs::write(
+            tmp.path().join("Artist - Album - 01 - You're Lost.flac"),
+            "existing",
+        )
+        .unwrap();
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            r#"name=$(printf 'Artist - Album - 01 - You\222re Lost.flac')
+printf 'track' > "$name"
+printf 'Splitting [album.flac] (0:01.00) --> [%s] (0:01.00) :\n' "$name" >&2
+exit 0
+"#,
+        );
+        let splitter = test_splitter(fake);
+
+        let err = splitter.split_cue_sync(&cue_path).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("sanitized generated track path already exists"));
     }
 
     #[test]
