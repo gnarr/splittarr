@@ -250,8 +250,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        decoder_args, detect_generated_tracks, parse_generated_tracks, snapshot_audio_files_best_effort,
-        ShnsplitCueSplitter,
+        decoder_args, detect_generated_tracks, parse_generated_tracks,
+        snapshot_audio_files_best_effort, ShnsplitCueSplitter,
     };
     use crate::domain::SplitStatus;
 

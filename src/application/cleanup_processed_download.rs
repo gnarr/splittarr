@@ -65,7 +65,8 @@ mod tests {
     use super::cleanup_processed_download;
     use crate::application::ports::{DownloadStore, TrackCleanup};
     use crate::domain::{
-        CueSheet, CueSheetStatus, DownloadLifecycleState, InputFileKind, RecordedTrack, TrackCleanupOutcome, TrackCleanupStatus, TrackedDownload,
+        CueSheet, CueSheetStatus, DownloadLifecycleState, InputFileKind, RecordedTrack,
+        TrackCleanupOutcome, TrackCleanupStatus, TrackedDownload,
     };
 
     #[derive(Default)]
@@ -79,7 +80,10 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn get_tracked_download(&self, _download_id: &str) -> Result<Option<TrackedDownload>> {
+        async fn get_tracked_download(
+            &self,
+            _download_id: &str,
+        ) -> Result<Option<TrackedDownload>> {
             Ok(None)
         }
 
