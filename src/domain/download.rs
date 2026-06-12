@@ -78,28 +78,6 @@ pub enum DownloadLifecycleState {
 }
 
 impl DownloadLifecycleState {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Detected => "detected",
-            Self::Processing => "processing",
-            Self::AwaitingImport => "awaiting_import",
-            Self::CleaningUp => "cleaning_up",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-        }
-    }
-
-    pub fn from_db(value: &str) -> Self {
-        match value {
-            "processing" => Self::Processing,
-            "awaiting_import" => Self::AwaitingImport,
-            "cleaning_up" => Self::CleaningUp,
-            "completed" => Self::Completed,
-            "failed" => Self::Failed,
-            _ => Self::Detected,
-        }
-    }
-
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Completed)
     }

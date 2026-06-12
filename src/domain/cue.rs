@@ -28,24 +28,6 @@ pub struct DiscoveredCueSheets {
 }
 
 impl CueSheetStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Split => "split",
-            Self::Skipped => "skipped",
-            Self::Failed => "failed",
-        }
-    }
-
-    pub fn from_db(value: &str) -> Self {
-        match value {
-            "split" => Self::Split,
-            "skipped" => Self::Skipped,
-            "failed" => Self::Failed,
-            _ => Self::Pending,
-        }
-    }
-
     pub fn is_terminal_success(self) -> bool {
         matches!(self, Self::Split | Self::Skipped)
     }
@@ -66,20 +48,4 @@ pub struct InputFile {
 pub enum InputFileKind {
     Cue,
     Audio,
-}
-
-impl InputFileKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Cue => "cue",
-            Self::Audio => "audio",
-        }
-    }
-
-    pub fn from_db(value: &str) -> Self {
-        match value {
-            "audio" => Self::Audio,
-            _ => Self::Cue,
-        }
-    }
 }

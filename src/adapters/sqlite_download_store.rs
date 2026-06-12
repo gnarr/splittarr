@@ -201,7 +201,7 @@ impl SqliteDownloadStore {
                 ":status": &download.status,
                 ":output_path": &download.output_path,
                 ":tracked_download_state": &download.tracked_download_state,
-                ":lifecycle_state": download.lifecycle_state.as_str(),
+                ":lifecycle_state": download_lifecycle_state_to_db(&download.lifecycle_state),
                 ":last_error": &download.last_error,
             },
         )?;
@@ -294,7 +294,7 @@ impl SqliteDownloadStore {
                 ":id": id,
                 ":path": &path,
                 ":download_id": download_id,
-                ":status": CueSheetStatus::Pending.as_str(),
+                ":status": cue_sheet_status_to_db(CueSheetStatus::Pending),
             },
         )?;
 
@@ -324,7 +324,7 @@ impl SqliteDownloadStore {
                 download_id,
                 cue_sheet_id,
                 path.to_string_lossy().to_string(),
-                kind.as_str(),
+                input_file_kind_to_db(kind),
                 size_bytes,
             ],
         )?;
@@ -348,7 +348,7 @@ impl SqliteDownloadStore {
              WHERE id = :id",
             named_params! {
                 ":id": &cue_sheet.id,
-                ":status": status.as_str(),
+                ":status": cue_sheet_status_to_db(status),
                 ":message": message,
             },
         )?;
@@ -397,7 +397,7 @@ impl SqliteDownloadStore {
                      ELSE NULL
                  END
              WHERE id = ?1",
-            params![track_id, status.as_str(), message],
+            params![track_id, track_cleanup_status_to_db(status), message],
         )?;
         tx.execute(
             "UPDATE downloads
@@ -428,7 +428,7 @@ impl SqliteDownloadStore {
                  WHERE id = ?1",
                 params![
                     &outcome.track_id,
-                    outcome.status.as_str(),
+                    track_cleanup_status_to_db(outcome.status),
                     outcome.message.as_deref()
                 ],
             )?;
@@ -710,11 +710,83 @@ fn map_download_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tracked
     })
 }
 
+fn download_lifecycle_state_to_db(state: &DownloadLifecycleState) -> &'static str {
+    match state {
+        DownloadLifecycleState::Detected => "detected",
+        DownloadLifecycleState::Processing => "processing",
+        DownloadLifecycleState::AwaitingImport => "awaiting_import",
+        DownloadLifecycleState::CleaningUp => "cleaning_up",
+        DownloadLifecycleState::Completed => "completed",
+        DownloadLifecycleState::Failed => "failed",
+    }
+}
+
+fn download_lifecycle_state_from_db(value: &str) -> DownloadLifecycleState {
+    match value {
+        "processing" => DownloadLifecycleState::Processing,
+        "awaiting_import" => DownloadLifecycleState::AwaitingImport,
+        "cleaning_up" => DownloadLifecycleState::CleaningUp,
+        "completed" => DownloadLifecycleState::Completed,
+        "failed" => DownloadLifecycleState::Failed,
+        _ => DownloadLifecycleState::Detected,
+    }
+}
+
+fn cue_sheet_status_to_db(status: CueSheetStatus) -> &'static str {
+    match status {
+        CueSheetStatus::Pending => "pending",
+        CueSheetStatus::Split => "split",
+        CueSheetStatus::Skipped => "skipped",
+        CueSheetStatus::Failed => "failed",
+    }
+}
+
+fn cue_sheet_status_from_db(value: &str) -> CueSheetStatus {
+    match value {
+        "split" => CueSheetStatus::Split,
+        "skipped" => CueSheetStatus::Skipped,
+        "failed" => CueSheetStatus::Failed,
+        _ => CueSheetStatus::Pending,
+    }
+}
+
+fn input_file_kind_to_db(kind: InputFileKind) -> &'static str {
+    match kind {
+        InputFileKind::Cue => "cue",
+        InputFileKind::Audio => "audio",
+    }
+}
+
+fn input_file_kind_from_db(value: &str) -> InputFileKind {
+    match value {
+        "audio" => InputFileKind::Audio,
+        _ => InputFileKind::Cue,
+    }
+}
+
+fn track_cleanup_status_to_db(status: TrackCleanupStatus) -> &'static str {
+    match status {
+        TrackCleanupStatus::Pending => "pending",
+        TrackCleanupStatus::Deleted => "deleted",
+        TrackCleanupStatus::DeleteFailed => "delete_failed",
+        TrackCleanupStatus::Missing => "missing",
+    }
+}
+
+fn track_cleanup_status_from_db(value: &str) -> TrackCleanupStatus {
+    match value {
+        "deleted" => TrackCleanupStatus::Deleted,
+        "delete_failed" => TrackCleanupStatus::DeleteFailed,
+        "missing" => TrackCleanupStatus::Missing,
+        _ => TrackCleanupStatus::Pending,
+    }
+}
+
 fn lifecycle_state_from_row(
     row: &rusqlite::Row<'_>,
     index: usize,
 ) -> rusqlite::Result<DownloadLifecycleState> {
-    Ok(DownloadLifecycleState::from_db(
+    Ok(download_lifecycle_state_from_db(
         row.get::<_, Option<String>>(index)?
             .as_deref()
             .unwrap_or("detected"),
@@ -735,7 +807,7 @@ fn cue_sheets_for(conn: &Connection, download_id: &str) -> rusqlite::Result<Vec<
             id,
             path: row.get(1)?,
             download_id: row.get(2)?,
-            status: CueSheetStatus::from_db(row.get::<_, String>(3)?.as_str()),
+            status: cue_sheet_status_from_db(row.get::<_, String>(3)?.as_str()),
             message: row.get(4)?,
             updated_at: row.get(5)?,
         })
@@ -761,7 +833,7 @@ fn input_files_for(conn: &Connection, download_id: &str) -> rusqlite::Result<Vec
             download_id: row.get(1)?,
             cue_sheet_id: row.get(2)?,
             path: row.get(3)?,
-            kind: InputFileKind::from_db(row.get::<_, String>(4)?.as_str()),
+            kind: input_file_kind_from_db(row.get::<_, String>(4)?.as_str()),
             size_bytes: row.get(5)?,
             captured_at: row.get(6)?,
         })
@@ -791,7 +863,7 @@ fn cue_sheet_by_download_and_path(
                 id,
                 path: row.get(1)?,
                 download_id: row.get(2)?,
-                status: CueSheetStatus::from_db(row.get::<_, String>(3)?.as_str()),
+                status: cue_sheet_status_from_db(row.get::<_, String>(3)?.as_str()),
                 message: row.get(4)?,
                 updated_at: row.get(5)?,
             })
@@ -817,7 +889,7 @@ fn tracks_for(
             download_id: row.get(2)?,
             path: row.get(3)?,
             size_bytes: row.get(4)?,
-            cleanup_status: TrackCleanupStatus::from_db(row.get::<_, String>(5)?.as_str()),
+            cleanup_status: track_cleanup_status_from_db(row.get::<_, String>(5)?.as_str()),
             cleanup_message: row.get(6)?,
             deleted_at: row.get(7)?,
         })
@@ -1111,6 +1183,135 @@ mod tests {
         CueSheetStatus, DownloadLifecycleState, InputFileKind, RecordedTrack, TrackCleanupOutcome,
         TrackCleanupStatus, TrackedDownload,
     };
+
+    #[test]
+    fn enum_database_mappings_preserve_existing_values() {
+        assert_eq!(
+            super::download_lifecycle_state_to_db(&DownloadLifecycleState::Detected),
+            "detected"
+        );
+        assert_eq!(
+            super::download_lifecycle_state_to_db(&DownloadLifecycleState::Processing),
+            "processing"
+        );
+        assert_eq!(
+            super::download_lifecycle_state_to_db(&DownloadLifecycleState::AwaitingImport),
+            "awaiting_import"
+        );
+        assert_eq!(
+            super::download_lifecycle_state_to_db(&DownloadLifecycleState::CleaningUp),
+            "cleaning_up"
+        );
+        assert_eq!(
+            super::download_lifecycle_state_to_db(&DownloadLifecycleState::Completed),
+            "completed"
+        );
+        assert_eq!(
+            super::download_lifecycle_state_to_db(&DownloadLifecycleState::Failed),
+            "failed"
+        );
+        assert_eq!(
+            super::download_lifecycle_state_from_db("processing"),
+            DownloadLifecycleState::Processing
+        );
+        assert_eq!(
+            super::download_lifecycle_state_from_db("awaiting_import"),
+            DownloadLifecycleState::AwaitingImport
+        );
+        assert_eq!(
+            super::download_lifecycle_state_from_db("cleaning_up"),
+            DownloadLifecycleState::CleaningUp
+        );
+        assert_eq!(
+            super::download_lifecycle_state_from_db("completed"),
+            DownloadLifecycleState::Completed
+        );
+        assert_eq!(
+            super::download_lifecycle_state_from_db("failed"),
+            DownloadLifecycleState::Failed
+        );
+        assert_eq!(
+            super::download_lifecycle_state_from_db("unexpected"),
+            DownloadLifecycleState::Detected
+        );
+
+        assert_eq!(
+            super::cue_sheet_status_to_db(CueSheetStatus::Pending),
+            "pending"
+        );
+        assert_eq!(
+            super::cue_sheet_status_to_db(CueSheetStatus::Split),
+            "split"
+        );
+        assert_eq!(
+            super::cue_sheet_status_to_db(CueSheetStatus::Skipped),
+            "skipped"
+        );
+        assert_eq!(
+            super::cue_sheet_status_to_db(CueSheetStatus::Failed),
+            "failed"
+        );
+        assert_eq!(
+            super::cue_sheet_status_from_db("split"),
+            CueSheetStatus::Split
+        );
+        assert_eq!(
+            super::cue_sheet_status_from_db("skipped"),
+            CueSheetStatus::Skipped
+        );
+        assert_eq!(
+            super::cue_sheet_status_from_db("failed"),
+            CueSheetStatus::Failed
+        );
+        assert_eq!(
+            super::cue_sheet_status_from_db("unexpected"),
+            CueSheetStatus::Pending
+        );
+
+        assert_eq!(super::input_file_kind_to_db(InputFileKind::Cue), "cue");
+        assert_eq!(super::input_file_kind_to_db(InputFileKind::Audio), "audio");
+        assert_eq!(
+            super::input_file_kind_from_db("audio"),
+            InputFileKind::Audio
+        );
+        assert_eq!(
+            super::input_file_kind_from_db("unexpected"),
+            InputFileKind::Cue
+        );
+
+        assert_eq!(
+            super::track_cleanup_status_to_db(TrackCleanupStatus::Pending),
+            "pending"
+        );
+        assert_eq!(
+            super::track_cleanup_status_to_db(TrackCleanupStatus::Deleted),
+            "deleted"
+        );
+        assert_eq!(
+            super::track_cleanup_status_to_db(TrackCleanupStatus::DeleteFailed),
+            "delete_failed"
+        );
+        assert_eq!(
+            super::track_cleanup_status_to_db(TrackCleanupStatus::Missing),
+            "missing"
+        );
+        assert_eq!(
+            super::track_cleanup_status_from_db("deleted"),
+            TrackCleanupStatus::Deleted
+        );
+        assert_eq!(
+            super::track_cleanup_status_from_db("delete_failed"),
+            TrackCleanupStatus::DeleteFailed
+        );
+        assert_eq!(
+            super::track_cleanup_status_from_db("missing"),
+            TrackCleanupStatus::Missing
+        );
+        assert_eq!(
+            super::track_cleanup_status_from_db("unexpected"),
+            TrackCleanupStatus::Pending
+        );
+    }
 
     #[test]
     fn repository_persists_history_and_file_snapshots() {
