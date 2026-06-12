@@ -526,6 +526,7 @@ pre {
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
@@ -543,6 +544,7 @@ mod tests {
         detail: Option<TrackedDownload>,
     }
 
+    #[async_trait]
     impl DownloadReadStore for FakeReadStore {
         async fn load_download_rows(&self) -> anyhow::Result<Vec<DownloadHistoryRow>> {
             Ok(self.rows.clone())

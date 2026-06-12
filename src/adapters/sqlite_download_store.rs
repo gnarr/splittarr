@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use rusqlite::{named_params, params, params_from_iter, Connection, OptionalExtension};
 use uuid::Uuid;
 
@@ -615,6 +616,7 @@ impl DownloadStore for SqliteDownloadStore {
     }
 }
 
+#[async_trait]
 impl DownloadReadStore for SqliteDownloadStore {
     async fn load_download_rows(&self) -> Result<Vec<DownloadHistoryRow>> {
         let store = self.clone();
