@@ -1191,7 +1191,8 @@ mod tests {
         );
 
         repo.upsert_tracked_download_sync(&download).unwrap();
-        repo.mark_download_awaiting_import_sync("download-1").unwrap();
+        repo.mark_download_awaiting_import_sync("download-1")
+            .unwrap();
 
         let conn = Connection::open(&repo.db_path).unwrap();
         conn.execute(
@@ -1203,7 +1204,8 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        repo.mark_download_awaiting_import_sync("download-1").unwrap();
+        repo.mark_download_awaiting_import_sync("download-1")
+            .unwrap();
 
         let stored = repo
             .get_tracked_download_sync("download-1")
@@ -1373,7 +1375,10 @@ mod tests {
             .query_row("PRAGMA busy_timeout", [], |row| row.get::<_, i64>(0))
             .unwrap();
 
-        assert_eq!(busy_timeout_ms, super::SQLITE_BUSY_TIMEOUT.as_millis() as i64);
+        assert_eq!(
+            busy_timeout_ms,
+            super::SQLITE_BUSY_TIMEOUT.as_millis() as i64
+        );
     }
 
     #[test]

@@ -71,6 +71,7 @@ where
     }
 
     if scan.cue_files.is_empty() {
+        eprintln!("Failed processing {}: no cue files found", download.title);
         store
             .mark_download_failed(&download.download_id, Some("no cue files found"))
             .await?;
@@ -104,6 +105,11 @@ where
             Err(err) => {
                 all_cues_complete = false;
                 let message = err.to_string();
+                eprintln!(
+                    "Failed splitting cue for {} at {}: {message}",
+                    download.title,
+                    cue_path.display()
+                );
                 failures.push(format!("{}: {message}", cue_path.display()));
                 store
                     .record_cue_result(&cue_sheet, CueSheetStatus::Failed, Some(&message), &[])
