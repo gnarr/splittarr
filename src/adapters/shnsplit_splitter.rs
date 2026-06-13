@@ -55,6 +55,12 @@ impl ShnsplitCueSplitter {
         let cue = parse_from_file(cue_path_str, self.cue_strict)
             .map_err(|err| anyhow!("failed to parse cue file {}: {err}", cue_path.display()))?;
 
+        let expected_tracks = cue
+            .files
+            .iter()
+            .map(|file| file.tracks.len())
+            .sum::<usize>();
+
         let referenced_files = cue
             .files
             .iter()
@@ -113,34 +119,18 @@ impl ShnsplitCueSplitter {
             ));
         }
 
-        let mut tracks = parse_generated_tracks(cue_dir, &output.stderr);
-        if tracks.is_empty() {
-            let files_after = snapshot_audio_files_best_effort(cue_dir, cue_path);
-            tracks = detect_generated_tracks(&referenced_paths, &files_before, &files_after);
-        }
-        if tracks.is_empty() {
-            return Err(anyhow!(
-                "shnsplit succeeded for {} but no generated tracks were detected",
-                cue_path.display()
-            ));
-        }
-
-        if tracks.iter().any(|track| !track.exists()) {
-            let files_after = snapshot_audio_files_best_effort(cue_dir, cue_path);
-            let detected_tracks =
-                detect_generated_tracks(&referenced_paths, &files_before, &files_after);
-            if !detected_tracks.is_empty() {
-                tracks = detected_tracks;
-            }
-        }
-
-        if let Some(track) = tracks.iter().find(|track| !track.exists()) {
-            return Err(anyhow!(
-                "shnsplit reported output that does not exist for {}: {}",
-                cue_path.display(),
-                track.display()
-            ));
-        }
+        let parsed_tracks = parse_generated_tracks(cue_dir, &output.stderr);
+        let files_after = snapshot_audio_files_best_effort(cue_dir, cue_path);
+        let detected_tracks =
+            detect_generated_tracks(&referenced_paths, &files_before, &files_after);
+        let tracks = select_generated_tracks(
+            cue_path,
+            expected_tracks,
+            &referenced_paths,
+            parsed_tracks,
+            detected_tracks,
+            &files_after,
+        )?;
         let tracks = normalize_generated_track_filenames(tracks)?;
 
         Ok(SplitOutcome {
@@ -149,6 +139,66 @@ impl ShnsplitCueSplitter {
             message: None,
         })
     }
+}
+
+fn select_generated_tracks(
+    cue_path: &Path,
+    expected_tracks: usize,
+    referenced_paths: &[PathBuf],
+    parsed_tracks: Vec<PathBuf>,
+    detected_tracks: Vec<PathBuf>,
+    files_after: &BTreeSet<FileSnapshot>,
+) -> Result<Vec<PathBuf>> {
+    let parsed_existing = existing_unique_tracks(parsed_tracks);
+    if parsed_existing.len() == expected_tracks {
+        return Ok(parsed_existing);
+    }
+
+    let combined_tracks =
+        existing_unique_tracks(parsed_existing.into_iter().chain(detected_tracks).collect());
+    if combined_tracks.len() == expected_tracks {
+        return Ok(combined_tracks);
+    }
+
+    let directory_tracks = non_source_audio_tracks(referenced_paths, files_after);
+    if directory_tracks.len() == expected_tracks {
+        return Ok(directory_tracks);
+    }
+
+    let generated_tracks = combined_tracks.len().max(directory_tracks.len());
+    if generated_tracks == 0 {
+        return Err(anyhow!(
+            "shnsplit succeeded for {} but no generated tracks were detected",
+            cue_path.display()
+        ));
+    }
+
+    Err(anyhow!(
+        "shnsplit generated {} track(s) for {} but cue contains {} track(s)",
+        generated_tracks,
+        cue_path.display(),
+        expected_tracks
+    ))
+}
+
+fn existing_unique_tracks(tracks: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut unique = BTreeSet::new();
+    tracks
+        .into_iter()
+        .filter(|track| track.exists())
+        .filter(|track| unique.insert(track.clone()))
+        .collect()
+}
+
+fn non_source_audio_tracks(
+    referenced_paths: &[PathBuf],
+    files_after: &BTreeSet<FileSnapshot>,
+) -> Vec<PathBuf> {
+    files_after
+        .iter()
+        .filter(|snapshot| !referenced_paths.iter().any(|path| path == &snapshot.path))
+        .map(|snapshot| snapshot.path.clone())
+        .collect()
 }
 
 fn parse_generated_tracks(cue_dir: &Path, stderr: &[u8]) -> Vec<PathBuf> {
@@ -555,6 +605,65 @@ exit 0
         assert!(!raw_path.exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn splitter_reconciles_directory_tracks_when_detection_misses_non_utf8_names() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_ten_track_fixture_album(tmp.path());
+        let raw_tracks = [
+            b"Artist - Album - 02 - You\x92re Lost.flac".to_vec(),
+            b"Artist - Album - 09 - I Can\x92t See.flac".to_vec(),
+            b"Artist - Album - 10 - Music\x92s Over.flac".to_vec(),
+        ];
+        let raw_paths = raw_tracks
+            .iter()
+            .map(|name| {
+                tmp.path()
+                    .join(PathBuf::from(OsString::from_vec(name.clone())))
+            })
+            .collect::<Vec<_>>();
+        for path in &raw_paths {
+            fs::write(path, b"track").unwrap();
+        }
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            r#"for n in 01 03 04 05 06 07 08; do
+  track="Artist - Album - $n - Track $n.flac"
+  printf 'track' > "$track"
+  printf 'Splitting [album.flac] (0:01.00) --> [%s] (0:01.00) :\n' "$track" >&2
+done
+exit 0
+"#,
+        );
+        let splitter = test_splitter(fake);
+
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
+
+        assert_eq!(result.status, SplitStatus::Split);
+        assert_eq!(result.tracks.len(), 10);
+        assert_eq!(
+            result.tracks,
+            vec![
+                tmp.path().join("Artist - Album - 01 - Track 01.flac"),
+                tmp.path().join("Artist - Album - 02 - You're Lost.flac"),
+                tmp.path().join("Artist - Album - 03 - Track 03.flac"),
+                tmp.path().join("Artist - Album - 04 - Track 04.flac"),
+                tmp.path().join("Artist - Album - 05 - Track 05.flac"),
+                tmp.path().join("Artist - Album - 06 - Track 06.flac"),
+                tmp.path().join("Artist - Album - 07 - Track 07.flac"),
+                tmp.path().join("Artist - Album - 08 - Track 08.flac"),
+                tmp.path().join("Artist - Album - 09 - I Can't See.flac"),
+                tmp.path().join("Artist - Album - 10 - Music's Over.flac"),
+            ]
+        );
+        for track in &result.tracks {
+            assert!(track.exists());
+        }
+        for path in &raw_paths {
+            assert!(!path.exists());
+        }
+    }
+
     #[test]
     fn sanitizes_unicode_punctuation_and_remaining_non_ascii() {
         let sanitized = sanitize_file_name_str(
@@ -676,6 +785,25 @@ exit 0
     }
 
     #[test]
+    fn splitter_rejects_partial_generated_track_detection() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_two_track_fixture_album(tmp.path());
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            r#"touch "Artist - Album - 01 - Track One.flac"
+echo "split complete" >&2
+exit 0
+"#,
+        );
+        let splitter = test_splitter(fake);
+
+        let err = splitter.split_cue_sync(&cue_path).unwrap_err();
+
+        assert!(err.to_string().contains("shnsplit generated 1 track(s)"));
+        assert!(err.to_string().contains("cue contains 2 track(s)"));
+    }
+
+    #[test]
     fn splitter_passes_flac_decoder_argument() {
         let tmp = tempdir().unwrap();
         let cue_path = write_fixture_album(tmp.path(), true);
@@ -728,6 +856,50 @@ FILE "album.flac" WAVE
         if with_audio {
             fs::write(dir.join("album.flac"), "").unwrap();
         }
+        cue_path
+    }
+
+    fn write_two_track_fixture_album(dir: &Path) -> PathBuf {
+        let cue_path = dir.join("album.cue");
+        fs::write(
+            &cue_path,
+            r#"PERFORMER "Artist"
+TITLE "Album"
+FILE "album.flac" WAVE
+  TRACK 01 AUDIO
+    TITLE "Track One"
+    PERFORMER "Artist"
+    INDEX 01 00:00:00
+  TRACK 02 AUDIO
+    TITLE "Track Two"
+    PERFORMER "Artist"
+    INDEX 01 01:00:00
+"#,
+        )
+        .unwrap();
+        fs::write(dir.join("album.flac"), "").unwrap();
+        cue_path
+    }
+
+    fn write_ten_track_fixture_album(dir: &Path) -> PathBuf {
+        let cue_path = dir.join("album.cue");
+        let mut cue = String::from(
+            r#"PERFORMER "Artist"
+TITLE "Album"
+FILE "album.flac" WAVE
+"#,
+        );
+        for track in 1..=10 {
+            cue.push_str(&format!(
+                r#"  TRACK {track:02} AUDIO
+    TITLE "Track {track:02}"
+    PERFORMER "Artist"
+    INDEX 01 {track:02}:00:00
+"#
+            ));
+        }
+        fs::write(&cue_path, cue).unwrap();
+        fs::write(dir.join("album.flac"), "").unwrap();
         cue_path
     }
 
