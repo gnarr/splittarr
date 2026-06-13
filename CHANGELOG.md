@@ -1,6 +1,13 @@
 # Changelog
 
 - - -
+## [v0.3.3](https://github.com/gnarr/splittarr/compare/3ecad71e8b7e9608743b4c496cdc1cb21648b6fc..v0.3.3) - 2026-06-13
+#### Bug Fixes
+- (**shnsplit**) preflight sanitized track renames - ([e2bb879](https://github.com/gnarr/splittarr/commit/e2bb8793e7e5b7fdf9f2bbf2be6f8e3eadb93126)) - Gunnar Cortes
+- (**shnsplit**) sanitize generated track filenames - ([3ecad71](https://github.com/gnarr/splittarr/commit/3ecad71e8b7e9608743b4c496cdc1cb21648b6fc)) - Gunnar Cortes
+
+- - -
+
 ## [v0.3.2](https://github.com/gnarr/splittarr/compare/db5d962e3ff9822d6ef6d520f9d86f9fb6f840a0..v0.3.2) - 2026-06-12
 #### Bug Fixes
 - (**shnsplit**) preserve non-utf8 track paths - ([62affca](https://github.com/gnarr/splittarr/commit/62affcad48c2b2b2f9afe48e98990ca4d5a8b634)) - Gunnar Cortes
