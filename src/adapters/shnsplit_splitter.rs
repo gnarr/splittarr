@@ -54,7 +54,6 @@ impl ShnsplitCueSplitter {
 
         let cue = parse_from_file(cue_path_str, self.cue_strict)
             .map_err(|err| anyhow!("failed to parse cue file {}: {err}", cue_path.display()))?;
-
         let expected_tracks = cue
             .files
             .iter()
