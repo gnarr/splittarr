@@ -186,13 +186,50 @@ fn path_from_shnsplit_bytes(bytes: &[u8]) -> PathBuf {
 }
 
 fn normalize_generated_track_filenames(tracks: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
-    tracks
-        .into_iter()
-        .map(normalize_generated_track_filename)
-        .collect()
+    let plan = build_generated_track_rename_plan(tracks)?;
+    for rename in &plan {
+        if rename.source != rename.target {
+            fs::rename(&rename.source, &rename.target).map_err(|err| {
+                anyhow!(
+                    "failed to rename generated track {} to {}: {err}",
+                    rename.source.display(),
+                    rename.target.display()
+                )
+            })?;
+        }
+    }
+    Ok(plan.into_iter().map(|rename| rename.target).collect())
 }
 
-fn normalize_generated_track_filename(path: PathBuf) -> Result<PathBuf> {
+fn build_generated_track_rename_plan(tracks: Vec<PathBuf>) -> Result<Vec<GeneratedTrackRename>> {
+    let mut plan = Vec::with_capacity(tracks.len());
+    let mut targets = BTreeSet::new();
+
+    for path in tracks {
+        let target = sanitized_generated_track_path(&path)?;
+        if !targets.insert(target.clone()) {
+            return Err(anyhow!(
+                "multiple generated tracks sanitize to the same path: {}",
+                target.display()
+            ));
+        }
+        if target.exists() && target != path {
+            return Err(anyhow!(
+                "sanitized generated track path already exists for {}: {}",
+                path.display(),
+                target.display()
+            ));
+        }
+        plan.push(GeneratedTrackRename {
+            source: path,
+            target,
+        });
+    }
+
+    Ok(plan)
+}
+
+fn sanitized_generated_track_path(path: &Path) -> Result<PathBuf> {
     let file_name = path
         .file_name()
         .ok_or_else(|| anyhow!("generated track path has no file name: {}", path.display()))?;
@@ -204,35 +241,13 @@ fn normalize_generated_track_filename(path: PathBuf) -> Result<PathBuf> {
         ));
     }
 
-    let Some(current_name) = file_name.to_str() else {
-        return rename_generated_track(path, sanitized);
-    };
-    if current_name == sanitized {
-        return Ok(path);
-    }
-    rename_generated_track(path, sanitized)
+    Ok(path.with_file_name(sanitized))
 }
 
-fn rename_generated_track(path: PathBuf, sanitized: String) -> Result<PathBuf> {
-    let target = path.with_file_name(sanitized);
-    if target == path {
-        return Ok(path);
-    }
-    if target.exists() {
-        return Err(anyhow!(
-            "sanitized generated track path already exists for {}: {}",
-            path.display(),
-            target.display()
-        ));
-    }
-    fs::rename(&path, &target).map_err(|err| {
-        anyhow!(
-            "failed to rename generated track {} to {}: {err}",
-            path.display(),
-            target.display()
-        )
-    })?;
-    Ok(target)
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GeneratedTrackRename {
+    source: PathBuf,
+    target: PathBuf,
 }
 
 fn sanitize_file_name(file_name: &std::ffi::OsStr) -> String {
@@ -325,7 +340,7 @@ fn ascii_replacement_for_byte(byte: u8) -> ByteReplacement {
             ByteReplacement::Char(char::from(byte))
         }
         0x91 | 0x92 => ByteReplacement::Char('\''),
-        0x93 | 0x94 => ByteReplacement::Char('"'),
+        0x93 | 0x94 => ByteReplacement::Char('\''),
         0x96 | 0x97 => ByteReplacement::Char('-'),
         0x85 => ByteReplacement::Str("..."),
         _ => ByteReplacement::Underscore,
@@ -344,7 +359,7 @@ fn ascii_replacement_for_char(ch: char) -> CharReplacement {
             CharReplacement::Char(ch)
         }
         '\u{2018}' | '\u{2019}' => CharReplacement::Char('\''),
-        '\u{201C}' | '\u{201D}' => CharReplacement::Char('"'),
+        '\u{201C}' | '\u{201D}' => CharReplacement::Char('\''),
         '\u{2013}' | '\u{2014}' => CharReplacement::Char('-'),
         '\u{2026}' => CharReplacement::Str("..."),
         _ => CharReplacement::Underscore,
@@ -444,8 +459,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        decoder_args, detect_generated_tracks, parse_generated_tracks, sanitize_file_name_str,
-        snapshot_audio_files_best_effort, ShnsplitCueSplitter,
+        decoder_args, detect_generated_tracks, normalize_generated_track_filenames,
+        parse_generated_tracks, sanitize_file_name_str, snapshot_audio_files_best_effort,
+        ShnsplitCueSplitter,
     };
     use crate::domain::SplitStatus;
 
@@ -545,7 +561,20 @@ exit 0
             "Artist - Album - 02 - \u{201C}Cafe\u{201D}\u{2014}deja vu\u{2026}.flac",
         );
 
-        assert_eq!(sanitized, "Artist - Album - 02 - \"Cafe\"-deja vu....flac");
+        assert_eq!(sanitized, "Artist - Album - 02 - 'Cafe'-deja vu....flac");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sanitizes_windows_1252_curly_double_quotes_consistently() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let sanitized = super::sanitize_file_name(OsStr::from_bytes(
+            b"Artist - Album - 02 - \x93Cafe\x94.flac",
+        ));
+
+        assert_eq!(sanitized, "Artist - Album - 02 - 'Cafe'.flac");
     }
 
     #[test]
@@ -553,6 +582,26 @@ exit 0
         let sanitized = sanitize_file_name_str("  \u{00E9}\u{00E5} Track \u{266B}.flac  ");
 
         assert_eq!(sanitized, "Track _.flac");
+    }
+
+    #[test]
+    fn generated_track_rename_preflight_rejects_duplicate_sanitized_targets() {
+        let tmp = tempdir().unwrap();
+        let first = tmp.path().join("Artist - Album - 01 - caf\u{00E9}.flac");
+        let second = tmp.path().join("Artist - Album - 01 - caf\u{00E5}.flac");
+        let target = tmp.path().join("Artist - Album - 01 - caf_.flac");
+        fs::write(&first, "first").unwrap();
+        fs::write(&second, "second").unwrap();
+
+        let err =
+            normalize_generated_track_filenames(vec![first.clone(), second.clone()]).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("multiple generated tracks sanitize to the same path"));
+        assert!(first.exists());
+        assert!(second.exists());
+        assert!(!target.exists());
     }
 
     #[cfg(unix)]
