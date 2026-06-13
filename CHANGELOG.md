@@ -1,6 +1,12 @@
 # Changelog
 
 - - -
+## [v0.3.4](https://github.com/gnarr/splittarr/compare/39c4f0b03f413e255a3307bf2b4a08e690ba5423..v0.3.4) - 2026-06-13
+#### Bug Fixes
+- (**shnsplit**) reject partial split output detection - ([39c4f0b](https://github.com/gnarr/splittarr/commit/39c4f0b03f413e255a3307bf2b4a08e690ba5423)) - Gunnar Cortes
+
+- - -
+
 ## [v0.3.3](https://github.com/gnarr/splittarr/compare/3ecad71e8b7e9608743b4c496cdc1cb21648b6fc..v0.3.3) - 2026-06-13
 #### Bug Fixes
 - (**shnsplit**) preflight sanitized track renames - ([e2bb879](https://github.com/gnarr/splittarr/commit/e2bb8793e7e5b7fdf9f2bbf2be6f8e3eadb93126)) - Gunnar Cortes
