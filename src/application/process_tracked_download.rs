@@ -104,6 +104,12 @@ where
         .await?;
 
         if cue_sheet.status.is_terminal_success() {
+            generated_tracks.extend(
+                cue_sheet
+                    .tracks
+                    .iter()
+                    .map(|track| PathBuf::from(&track.path)),
+            );
             continue;
         }
 
@@ -278,8 +284,8 @@ mod tests {
         DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
     };
     use crate::domain::{
-        CueSheet, CueSheetStatus, DiscoveredCueSheets, InputFileKind, RecordedTrack, SplitOutcome,
-        SplitStatus, TrackCleanupStatus, TrackedDownload,
+        CueSheet, CueSheetStatus, DiscoveredCueSheets, GeneratedTrack, InputFileKind,
+        RecordedTrack, SplitOutcome, SplitStatus, TrackCleanupStatus, TrackedDownload,
     };
 
     #[derive(Default)]
@@ -289,6 +295,7 @@ mod tests {
         recorded_cues: Mutex<Vec<String>>,
         recorded_input_files: Mutex<Vec<(String, InputFileKind)>>,
         recorded_tracks: Mutex<Vec<String>>,
+        cue_sheets: Mutex<Vec<CueSheet>>,
         warnings: Mutex<Vec<String>>,
     }
 
@@ -351,6 +358,18 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(path.to_string_lossy().to_string());
+            if let Some(cue_sheet) = self
+                .cue_sheets
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|cue_sheet| {
+                    cue_sheet.download_id == download_id && cue_sheet.path == path.to_string_lossy()
+                })
+                .cloned()
+            {
+                return Ok(cue_sheet);
+            }
             Ok(CueSheet {
                 id: format!("cue:{}", path.display()),
                 download_id: download_id.to_owned(),
@@ -663,6 +682,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_import_includes_tracks_from_already_split_cues() {
+        let tmp = tempdir().unwrap();
+        let cue_path = tmp.path().join("album.cue");
+        let audio_path = tmp.path().join("album.flac");
+        let recorded_track = tmp.path().join("01 - Track.flac");
+        fs::write(&audio_path, b"audio").unwrap();
+        fs::write(&recorded_track, b"track").unwrap();
+        fs::write(
+            &cue_path,
+            "FILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+
+        let store = FakeStore::default();
+        store.cue_sheets.lock().unwrap().push(CueSheet {
+            id: "cue-1".into(),
+            download_id: "download-1".into(),
+            path: cue_path.to_string_lossy().to_string(),
+            status: CueSheetStatus::Split,
+            message: None,
+            updated_at: "now".into(),
+            tracks: vec![GeneratedTrack {
+                id: "track-1".into(),
+                cue_sheet_id: "cue-1".into(),
+                download_id: "download-1".into(),
+                path: recorded_track.to_string_lossy().to_string(),
+                size_bytes: Some(5),
+                cleanup_status: TrackCleanupStatus::Pending,
+                cleanup_message: None,
+                deleted_at: None,
+            }],
+        });
+        let scanner = FakeScanner {
+            roots: Mutex::new(Vec::new()),
+            cue_files: vec![cue_path],
+        };
+        let inspector = FakeInspector {
+            matches: Mutex::new(Vec::new()),
+        };
+        let splitter = FakeSplitter {
+            calls: Mutex::new(Vec::new()),
+        };
+        let manual_import = FakeManualImport::default();
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Album".into(),
+            "completed".into(),
+            tmp.path().to_string_lossy().to_string(),
+            "importFailed".into(),
+        );
+
+        process_tracked_download(
+            &store,
+            &scanner,
+            &inspector,
+            &splitter,
+            &manual_import,
+            download,
+        )
+        .await
+        .unwrap();
+
+        assert!(splitter.calls.lock().unwrap().is_empty());
+        let calls = manual_import.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].generated_tracks, vec![recorded_track]);
+        assert_eq!(calls[0].cue_hints[0].track_count, 1);
+    }
+
+    #[tokio::test]
     async fn invalid_cue_snapshot_records_cue_file_and_continues_processing() {
         let tmp = tempdir().unwrap();
         let cue_path = tmp.path().join("broken.cue");
@@ -704,7 +793,7 @@ mod tests {
 
         assert_eq!(
             splitter.calls.lock().unwrap().as_slice(),
-            &[cue_path.clone()]
+            std::slice::from_ref(&cue_path)
         );
         assert_eq!(
             store.recorded_input_files.lock().unwrap().as_slice(),
