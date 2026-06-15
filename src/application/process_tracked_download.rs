@@ -1,8 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
+use rcue::parser::parse_from_file;
 
-use crate::application::ports::{CueInputInspector, CueScanner, CueSplitter, DownloadStore};
+use crate::application::ports::{
+    CueInputInspector, CueMetadataHint, CueScanner, CueSplitter, DownloadStore,
+    ManualImportRequest, ManualImportTrigger,
+};
 use crate::domain::{
     CueSheet, CueSheetStatus, FailedImportCandidate, InputFileKind, RecordedTrack, SplitOutcome,
     SplitStatus, TrackedDownload,
@@ -40,11 +44,12 @@ pub async fn register_failed_imports<S: DownloadStore>(
     Ok(())
 }
 
-pub async fn process_tracked_download<S, C, I, P>(
+pub async fn process_tracked_download<S, C, I, P, M>(
     store: &S,
     scanner: &C,
     inspector: &I,
     splitter: &P,
+    manual_import: &M,
     download: TrackedDownload,
 ) -> Result<()>
 where
@@ -52,6 +57,7 @@ where
     C: CueScanner,
     I: CueInputInspector,
     P: CueSplitter,
+    M: ManualImportTrigger,
 {
     store
         .mark_download_processing(&download.download_id)
@@ -80,8 +86,11 @@ where
 
     let mut all_cues_complete = true;
     let mut failures = Vec::new();
+    let mut generated_tracks = Vec::new();
+    let mut cue_hints = Vec::new();
 
     for cue_path in scan.cue_files {
+        cue_hints.push(cue_metadata_hint(&cue_path));
         let cue_sheet = store
             .get_or_create_cue_sheet(&download.download_id, &cue_path)
             .await?;
@@ -100,7 +109,9 @@ where
 
         match splitter.split_cue(&cue_path).await {
             Ok(result) => {
+                let tracks = result.tracks.clone();
                 store_split_result(store, inspector, &cue_sheet, result).await?;
+                generated_tracks.extend(tracks);
             }
             Err(err) => {
                 all_cues_complete = false;
@@ -127,6 +138,26 @@ where
         store
             .mark_download_awaiting_import(&download.download_id)
             .await?;
+        if !generated_tracks.is_empty() {
+            let request = ManualImportRequest {
+                download: download.clone(),
+                generated_tracks,
+                cue_hints,
+            };
+            match manual_import.trigger_manual_import(request).await {
+                Ok(result) => println!("Manual import for {}: {result:?}", download.title),
+                Err(err) => {
+                    let message = format!("manual import trigger failed: {err}");
+                    eprintln!(
+                        "Manual import trigger failed for {}: {err:#}",
+                        download.title
+                    );
+                    store
+                        .record_download_warning(&download.download_id, &message)
+                        .await?;
+                }
+            }
+        }
     } else {
         store
             .mark_download_failed(&download.download_id, error_message.as_deref())
@@ -135,6 +166,31 @@ where
 
     println!("Done processing {}", download.title);
     Ok(())
+}
+
+fn cue_metadata_hint(cue_path: &Path) -> CueMetadataHint {
+    let cue = cue_path
+        .to_str()
+        .and_then(|path| parse_from_file(path, false).ok());
+    let Some(cue) = cue else {
+        return CueMetadataHint {
+            path: cue_path.to_path_buf(),
+            album_title: None,
+            performer: None,
+            catalog: None,
+            comments: Vec::new(),
+            track_count: 0,
+        };
+    };
+
+    CueMetadataHint {
+        path: cue_path.to_path_buf(),
+        album_title: cue.title,
+        performer: cue.performer,
+        catalog: cue.catalog,
+        comments: cue.comments,
+        track_count: cue.files.iter().map(|file| file.tracks.len()).sum(),
+    }
 }
 
 async fn store_split_result<S: DownloadStore, I: CueInputInspector>(
@@ -219,7 +275,7 @@ mod tests {
     use super::process_tracked_download;
     use crate::application::ports::{
         CueInputInspector, CueInputSnapshot, CueReferencedAudioInput, CueScanner, CueSplitter,
-        DownloadStore,
+        DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
     };
     use crate::domain::{
         CueSheet, CueSheetStatus, DiscoveredCueSheets, InputFileKind, RecordedTrack, SplitOutcome,
@@ -233,6 +289,7 @@ mod tests {
         recorded_cues: Mutex<Vec<String>>,
         recorded_input_files: Mutex<Vec<(String, InputFileKind)>>,
         recorded_tracks: Mutex<Vec<String>>,
+        warnings: Mutex<Vec<String>>,
     }
 
     impl DownloadStore for FakeStore {
@@ -276,6 +333,12 @@ mod tests {
         ) -> Result<()> {
             self.states.lock().unwrap().push("failed".into());
             *self.last_error.lock().unwrap() = last_error.map(str::to_owned);
+            Ok(())
+        }
+
+        async fn record_download_warning(&self, _download_id: &str, message: &str) -> Result<()> {
+            self.warnings.lock().unwrap().push(message.to_owned());
+            *self.last_error.lock().unwrap() = Some(message.to_owned());
             Ok(())
         }
 
@@ -417,6 +480,27 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FakeManualImport {
+        calls: Mutex<Vec<ManualImportRequest>>,
+        fail: bool,
+    }
+
+    impl ManualImportTrigger for FakeManualImport {
+        async fn trigger_manual_import(
+            &self,
+            request: ManualImportRequest,
+        ) -> Result<ManualImportResult> {
+            self.calls.lock().unwrap().push(request);
+            if self.fail {
+                return Err(anyhow::anyhow!("lidarr is unavailable"));
+            }
+            Ok(ManualImportResult::Started {
+                imported_track_count: 1,
+            })
+        }
+    }
+
     #[tokio::test]
     async fn processes_file_output_path_using_parent_directory_and_matching_cue() {
         let tmp = tempdir().unwrap();
@@ -440,6 +524,7 @@ mod tests {
         let splitter = FakeSplitter {
             calls: Mutex::new(Vec::new()),
         };
+        let manual_import = FakeManualImport::default();
         let download = TrackedDownload::pending(
             "download-1".into(),
             "Single".into(),
@@ -448,9 +533,16 @@ mod tests {
             "importFailed".into(),
         );
 
-        process_tracked_download(&store, &scanner, &inspector, &splitter, download)
-            .await
-            .unwrap();
+        process_tracked_download(
+            &store,
+            &scanner,
+            &inspector,
+            &splitter,
+            &manual_import,
+            download,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             scanner.roots.lock().unwrap().as_slice(),
@@ -462,6 +554,7 @@ mod tests {
             .lock()
             .unwrap()
             .contains(&"awaiting_import".to_string()));
+        assert_eq!(manual_import.calls.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -487,6 +580,7 @@ mod tests {
         let splitter = FakeSplitter {
             calls: Mutex::new(Vec::new()),
         };
+        let manual_import = FakeManualImport::default();
         let download = TrackedDownload::pending(
             "download-1".into(),
             "Single".into(),
@@ -495,11 +589,19 @@ mod tests {
             "importFailed".into(),
         );
 
-        process_tracked_download(&store, &scanner, &inspector, &splitter, download)
-            .await
-            .unwrap();
+        process_tracked_download(
+            &store,
+            &scanner,
+            &inspector,
+            &splitter,
+            &manual_import,
+            download,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(splitter.calls.lock().unwrap().len(), 0);
+        assert_eq!(manual_import.calls.lock().unwrap().len(), 0);
         assert_eq!(
             store.last_error.lock().unwrap().as_deref(),
             Some("no cue files found")
@@ -537,6 +639,7 @@ mod tests {
         let splitter = FakeSplitter {
             calls: Mutex::new(Vec::new()),
         };
+        let manual_import = FakeManualImport::default();
         let download = TrackedDownload::pending(
             "download-1".into(),
             "Single".into(),
@@ -545,9 +648,16 @@ mod tests {
             "importFailed".into(),
         );
 
-        process_tracked_download(&store, &scanner, &inspector, &splitter, download)
-            .await
-            .unwrap();
+        process_tracked_download(
+            &store,
+            &scanner,
+            &inspector,
+            &splitter,
+            &manual_import,
+            download,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(splitter.calls.lock().unwrap().as_slice(), &[target_cue]);
     }
@@ -569,6 +679,10 @@ mod tests {
         let splitter = FakeSplitter {
             calls: Mutex::new(Vec::new()),
         };
+        let manual_import = FakeManualImport {
+            fail: true,
+            ..Default::default()
+        };
         let download = TrackedDownload::pending(
             "download-1".into(),
             "Broken".into(),
@@ -577,9 +691,16 @@ mod tests {
             "importFailed".into(),
         );
 
-        process_tracked_download(&store, &scanner, &inspector, &splitter, download)
-            .await
-            .unwrap();
+        process_tracked_download(
+            &store,
+            &scanner,
+            &inspector,
+            &splitter,
+            &manual_import,
+            download,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             splitter.calls.lock().unwrap().as_slice(),
@@ -594,5 +715,9 @@ mod tests {
             .lock()
             .unwrap()
             .contains(&"awaiting_import".to_string()));
+        assert_eq!(
+            store.warnings.lock().unwrap().as_slice(),
+            &["manual import trigger failed: lidarr is unavailable"]
+        );
     }
 }

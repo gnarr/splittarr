@@ -283,6 +283,18 @@ impl SqliteDownloadStore {
         Ok(())
     }
 
+    fn record_download_warning_sync(&self, download_id: &str, message: &str) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE downloads
+             SET last_error = ?2,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE download_id = ?1",
+            params![download_id, message],
+        )?;
+        Ok(())
+    }
+
     fn get_or_create_cue_sheet_sync(&self, download_id: &str, path: &Path) -> Result<CueSheet> {
         let conn = self.connect()?;
         let path = path.to_string_lossy().to_string();
@@ -525,6 +537,17 @@ impl DownloadStore for SqliteDownloadStore {
         let last_error = last_error.map(str::to_owned);
         tokio::task::spawn_blocking(move || {
             store.mark_download_failed_sync(&download_id, last_error.as_deref())
+        })
+        .await
+        .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
+
+    async fn record_download_warning(&self, download_id: &str, message: &str) -> Result<()> {
+        let store = self.clone();
+        let download_id = download_id.to_owned();
+        let message = message.to_owned();
+        tokio::task::spawn_blocking(move || {
+            store.record_download_warning_sync(&download_id, &message)
         })
         .await
         .map_err(|err| anyhow!("blocking task failed to join: {err}"))?

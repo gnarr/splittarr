@@ -135,6 +135,7 @@ bind_address = "127.0.0.1:9899"
 [lidarr]
 url = "http://lidarr:8686"
 api_key = "your-lidarr-api-key"
+manual_import_enabled = false
 
 [cue]
 strict = false
@@ -164,6 +165,7 @@ Nested configuration keys use a double underscore.
 ```bash
 export SPLITTARR_LIDARR__URL=http://lidarr:8686
 export SPLITTARR_LIDARR__API_KEY=your-lidarr-api-key
+export SPLITTARR_LIDARR__MANUAL_IMPORT_ENABLED=false
 export SPLITTARR_CHECK_FREQUENCY_SECONDS=60
 export SPLITTARR_SERVER__BIND_ADDRESS=127.0.0.1:9899
 export SPLITTARR_SHNSPLIT__FORMAT="%p - %a - %n - %t"
@@ -180,6 +182,7 @@ splittarr
 | `server.bind_address`     | `SPLITTARR_SERVER__BIND_ADDRESS`    | `127.0.0.1:9899`                       | Address for the built-in web UI and health endpoint.       |
 | `lidarr.url`              | `SPLITTARR_LIDARR__URL`             | required                               | Base URL for Lidarr, for example `http://lidarr:8686`.     |
 | `lidarr.api_key`          | `SPLITTARR_LIDARR__API_KEY`         | required                               | Lidarr API key.                                            |
+| `lidarr.manual_import_enabled` | `SPLITTARR_LIDARR__MANUAL_IMPORT_ENABLED` | `false` | Whether Splittarr should ask Lidarr to manually import generated tracks after splitting. |
 | `cue.strict`              | `SPLITTARR_CUE__STRICT`             | `false`                                | Whether CUE parsing should run in strict mode.             |
 | `shnsplit.path`           | `SPLITTARR_SHNSPLIT__PATH`          | `shnsplit`                             | Path to the `shnsplit` executable.                         |
 | `shnsplit.overwrite`      | `SPLITTARR_SHNSPLIT__OVERWRITE`     | `true`                                 | Whether `shnsplit` should overwrite existing output files. |
