@@ -175,9 +175,7 @@ where
 }
 
 fn cue_metadata_hint(cue_path: &Path) -> CueMetadataHint {
-    let cue = cue_path
-        .to_str()
-        .and_then(|path| parse_from_file(path, false).ok());
+    let cue = parse_from_file(&cue_path.to_string_lossy(), false).ok();
     let Some(cue) = cue else {
         return CueMetadataHint {
             path: cue_path.to_path_buf(),
