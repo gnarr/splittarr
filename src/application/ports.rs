@@ -55,6 +55,9 @@ pub trait DownloadStore {
     async fn mark_download_completed(&self, download_id: &str) -> Result<()>;
     async fn mark_download_failed(&self, download_id: &str, last_error: Option<&str>)
         -> Result<()>;
+    async fn record_download_warning(&self, _download_id: &str, _message: &str) -> Result<()> {
+        Ok(())
+    }
     async fn get_or_create_cue_sheet(&self, download_id: &str, path: &Path) -> Result<CueSheet>;
     async fn record_input_file(
         &self,
@@ -136,6 +139,37 @@ pub trait CueInputInspector {
 
 pub trait CueSplitter {
     async fn split_cue(&self, cue_path: &Path) -> Result<SplitOutcome>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualImportRequest {
+    pub download: TrackedDownload,
+    pub generated_tracks: Vec<PathBuf>,
+    pub cue_hints: Vec<CueMetadataHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CueMetadataHint {
+    pub path: PathBuf,
+    pub album_title: Option<String>,
+    pub performer: Option<String>,
+    pub catalog: Option<String>,
+    pub comments: Vec<(String, String)>,
+    pub track_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManualImportResult {
+    Disabled,
+    Started { imported_track_count: usize },
+    Skipped { reason: String },
+}
+
+pub trait ManualImportTrigger {
+    async fn trigger_manual_import(
+        &self,
+        request: ManualImportRequest,
+    ) -> Result<ManualImportResult>;
 }
 
 pub trait TrackCleanup {

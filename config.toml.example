@@ -9,6 +9,7 @@ url = "https://lidarr.example.com"
 api_key = "a3bb47a4968223c7568b06d4a2e9cf95"
 queue_page_size = 100
 queue_max_pages = 100
+manual_import_enabled = false
 
 [cue]
 strict = false
