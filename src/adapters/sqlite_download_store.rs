@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use rusqlite::{named_params, params, params_from_iter, Connection, OptionalExtension};
 use uuid::Uuid;
 
-use crate::application::ports::{DownloadHistoryRow, DownloadReadStore, DownloadStore};
+use crate::application::ports::{
+    DownloadHistoryRow, DownloadReadStore, DownloadStats, DownloadStore,
+};
 use crate::domain::{
     CueSheet, CueSheetStatus, DownloadLifecycleState, GeneratedTrack, InputFile, InputFileKind,
     RecordedTrack, TrackCleanupOutcome, TrackCleanupStatus, TrackedDownload,
@@ -173,6 +175,28 @@ impl SqliteDownloadStore {
             }
         }
         Ok(downloads)
+    }
+
+    fn load_download_stats_sync(&self) -> Result<DownloadStats> {
+        let conn = self.connect()?;
+        let mut stmt = conn
+            .prepare("SELECT lifecycle_state, COUNT(*) FROM downloads GROUP BY lifecycle_state")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+        })?;
+        let mut stats = DownloadStats::default();
+        for row in rows {
+            let (state, count) = row?;
+            stats.total += count;
+            match state.as_str() {
+                "completed" => stats.completed += count,
+                "failed" => stats.failed += count,
+                "awaiting_import" => stats.awaiting_import += count,
+                "detected" | "processing" | "cleaning_up" => stats.in_progress += count,
+                _ => {}
+            }
+        }
+        Ok(stats)
     }
 
     fn upsert_tracked_download_sync(&self, download: &TrackedDownload) -> Result<()> {
@@ -660,6 +684,13 @@ impl DownloadReadStore for SqliteDownloadStore {
         let store = self.clone();
         let download_id = download_id.to_owned();
         tokio::task::spawn_blocking(move || store.get_tracked_download_sync(&download_id))
+            .await
+            .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
+    }
+
+    async fn load_download_stats(&self) -> Result<DownloadStats> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.load_download_stats_sync())
             .await
             .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
     }

@@ -40,6 +40,16 @@ async fn main() -> Result<()> {
     let download_store =
         SqliteDownloadStore::open(&settings.data_dir).context("initialize Splittarr database")?;
     let web_store = download_store.clone();
+    let status_config = web::StatusConfig {
+        version: env!("CARGO_PKG_VERSION"),
+        lidarr_url: settings.lidarr.url.clone(),
+        check_frequency_seconds: settings.check_frequency_seconds,
+        manual_import_enabled: settings.lidarr.manual_import_enabled,
+        musicbrainz_enabled: settings.musicbrainz.disc_lookup_enabled,
+        gnudb_enabled: settings.gnudb.disc_lookup_enabled,
+        cue_strict: settings.cue.strict,
+        download_log_enabled: settings.logging.download_log_enabled,
+    };
     let cue_scanner = FilesystemCueScanner::new();
     let cue_input_inspector = FilesystemCueInputInspector::new();
     let download_log = FilesystemDownloadLog::new(settings.logging.download_log_enabled);
@@ -66,7 +76,7 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(&settings.server.bind_address)
         .await
         .with_context(|| format!("bind {}", settings.server.bind_address))?;
-    let app = web::router(web_store);
+    let app = web::router(web_store, status_config);
 
     println!(
         "Web UI listening on http://{}",

@@ -7,23 +7,37 @@ use axum::{
 };
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
-use crate::application::ports::{DownloadHistoryRow, DownloadReadStore};
+use crate::application::ports::{DownloadHistoryRow, DownloadReadStore, DownloadStats};
 use crate::domain::{
     CueSheet, CueSheetStatus, DownloadLifecycleState, GeneratedTrack, InputFile, InputFileKind,
     TrackCleanupStatus, TrackedDownload,
 };
 
 #[derive(Clone)]
-struct WebState<S> {
-    store: S,
+pub struct StatusConfig {
+    pub version: &'static str,
+    pub lidarr_url: String,
+    pub check_frequency_seconds: u64,
+    pub manual_import_enabled: bool,
+    pub musicbrainz_enabled: bool,
+    pub gnudb_enabled: bool,
+    pub cue_strict: bool,
+    pub download_log_enabled: bool,
 }
 
-pub fn router<S>(store: S) -> Router
+#[derive(Clone)]
+struct WebState<S> {
+    store: S,
+    status: StatusConfig,
+}
+
+pub fn router<S>(store: S, status: StatusConfig) -> Router
 where
     S: DownloadReadStore + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/", get(index::<S>))
+        .route("/status", get(status_page::<S>))
         .route("/healthz", get(healthz))
         .route("/downloads/{download_id}", get(download_detail::<S>))
         .route(
@@ -32,11 +46,35 @@ where
         )
         .route("/downloads/{download_id}/row", get(download_row_route::<S>))
         .route("/downloads/rows", get(download_rows_route::<S>))
-        .with_state(WebState { store })
+        .with_state(WebState { store, status })
 }
 
 async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, "ok")
+}
+
+async fn status_page<S>(State(state): State<WebState<S>>) -> Response
+where
+    S: DownloadReadStore,
+{
+    match state.store.load_download_stats().await {
+        Ok(stats) => Html(page(
+            "Splittarr — Status",
+            html! {
+                nav {
+                    a href="/" { "Download History" }
+                }
+                h1 { "Splittarr" }
+                (status_content(&state.status, &stats))
+            },
+        ))
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to load status: {error}"),
+        )
+            .into_response(),
+    }
 }
 
 async fn index<S>(State(state): State<WebState<S>>) -> Response
@@ -47,6 +85,9 @@ where
         Ok(downloads) => Html(page(
             "Splittarr",
             html! {
+                nav {
+                    a href="/status" { "Status" }
+                }
                 h1 { "Splittarr" }
                 section class="panel" {
                     h2 { "Download History" }
@@ -178,6 +219,83 @@ fn page(title: &str, body: Markup) -> String {
         }
     }
     .into_string()
+}
+
+fn status_content(config: &StatusConfig, stats: &DownloadStats) -> Markup {
+    html! {
+        section class="panel grid" {
+            div {
+                strong { "Version" }
+                span { (config.version) }
+            }
+            div {
+                strong { "Lidarr URL" }
+                span class="path" { (&config.lidarr_url) }
+            }
+            div {
+                strong { "Check frequency" }
+                span { (config.check_frequency_seconds) " s" }
+            }
+        }
+        section class="panel" {
+            h2 { "Features" }
+            div class="grid" {
+                div {
+                    strong { "Manual import" }
+                    (feature_badge(config.manual_import_enabled))
+                }
+                div {
+                    strong { "MusicBrainz disc lookup" }
+                    (feature_badge(config.musicbrainz_enabled))
+                }
+                div {
+                    strong { "GnuDB disc lookup" }
+                    (feature_badge(config.gnudb_enabled))
+                }
+                div {
+                    strong { "Strict CUE mode" }
+                    (feature_badge(config.cue_strict))
+                }
+                div {
+                    strong { "Download logging" }
+                    (feature_badge(config.download_log_enabled))
+                }
+            }
+        }
+        section class="panel" {
+            h2 { "Downloads" }
+            div class="grid" {
+                div {
+                    strong { "Total" }
+                    span { (stats.total) }
+                }
+                div {
+                    strong { "Completed" }
+                    span class="status status-ok" { (stats.completed) }
+                }
+                div {
+                    strong { "Failed" }
+                    span class=(if stats.failed > 0 { "status status-error" } else { "status status-ok" }) { (stats.failed) }
+                }
+                div {
+                    strong { "Awaiting import" }
+                    span class=(if stats.awaiting_import > 0 { "status status-warn" } else { "status" }) { (stats.awaiting_import) }
+                }
+                div {
+                    strong { "In progress" }
+                    span class=(if stats.in_progress > 0 { "status status-active" } else { "status" }) { (stats.in_progress) }
+                }
+            }
+        }
+    }
+}
+
+fn feature_badge(enabled: bool) -> Markup {
+    if enabled {
+        html! { span class="status status-ok" { "enabled" } }
+    } else {
+        html! { span class="status" { "disabled" } }
+    }
 }
 
 fn download_row(download: &DownloadHistoryRow) -> Markup {
@@ -560,8 +678,8 @@ mod tests {
     use axum::http::Request;
     use tower::ServiceExt;
 
-    use super::router;
-    use crate::application::ports::{DownloadHistoryRow, DownloadReadStore};
+    use super::{router, StatusConfig};
+    use crate::application::ports::{DownloadHistoryRow, DownloadReadStore, DownloadStats};
     use crate::domain::{
         CueSheet, CueSheetStatus, DownloadLifecycleState, GeneratedTrack, InputFile, InputFileKind,
         TrackCleanupStatus, TrackedDownload,
@@ -600,11 +718,28 @@ mod tests {
                 .filter(|download| download.download_id == download_id)
                 .cloned())
         }
+
+        async fn load_download_stats(&self) -> anyhow::Result<DownloadStats> {
+            Ok(DownloadStats::default())
+        }
+    }
+
+    fn fake_status_config() -> StatusConfig {
+        StatusConfig {
+            version: "0.0.0-test",
+            lidarr_url: "http://lidarr:8686".into(),
+            check_frequency_seconds: 60,
+            manual_import_enabled: true,
+            musicbrainz_enabled: true,
+            gnudb_enabled: false,
+            cue_strict: false,
+            download_log_enabled: true,
+        }
     }
 
     #[tokio::test]
     async fn index_renders_empty_state_with_fake_read_store() {
-        let app = router(FakeReadStore::default());
+        let app = router(FakeReadStore::default(), fake_status_config());
 
         let response = app
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
@@ -654,10 +789,13 @@ mod tests {
             }],
         }];
 
-        let app = router(FakeReadStore {
-            detail: Some(download),
-            ..FakeReadStore::default()
-        });
+        let app = router(
+            FakeReadStore {
+                detail: Some(download),
+                ..FakeReadStore::default()
+            },
+            fake_status_config(),
+        );
         let response = app
             .oneshot(
                 Request::builder()
@@ -678,20 +816,23 @@ mod tests {
 
     #[tokio::test]
     async fn rows_endpoint_renders_all_rows_in_one_response() {
-        let app = router(FakeReadStore {
-            rows: vec![DownloadHistoryRow {
-                download_id: "abc".into(),
-                title: "Album".into(),
-                status: "completed".into(),
-                output_path: "/downloads/album".into(),
-                tracked_download_state: "importFailed".into(),
-                lifecycle_state: DownloadLifecycleState::Detected,
-                updated_at: "2026-06-12 12:00:00".into(),
-                completed_at: None,
-                generated_track_count: 0,
-            }],
-            detail: None,
-        });
+        let app = router(
+            FakeReadStore {
+                rows: vec![DownloadHistoryRow {
+                    download_id: "abc".into(),
+                    title: "Album".into(),
+                    status: "completed".into(),
+                    output_path: "/downloads/album".into(),
+                    tracked_download_state: "importFailed".into(),
+                    lifecycle_state: DownloadLifecycleState::Detected,
+                    updated_at: "2026-06-12 12:00:00".into(),
+                    completed_at: None,
+                    generated_track_count: 0,
+                }],
+                detail: None,
+            },
+            fake_status_config(),
+        );
         let response = app
             .oneshot(
                 Request::builder()

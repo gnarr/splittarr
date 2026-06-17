@@ -26,11 +26,21 @@ pub struct DownloadHistoryRow {
     pub generated_track_count: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DownloadStats {
+    pub total: usize,
+    pub completed: usize,
+    pub failed: usize,
+    pub awaiting_import: usize,
+    pub in_progress: usize,
+}
+
 #[async_trait]
 pub trait DownloadReadStore {
     async fn load_download_rows(&self) -> Result<Vec<DownloadHistoryRow>>;
     async fn load_download_row(&self, download_id: &str) -> Result<Option<DownloadHistoryRow>>;
     async fn get_tracked_download(&self, download_id: &str) -> Result<Option<TrackedDownload>>;
+    async fn load_download_stats(&self) -> Result<DownloadStats>;
 }
 
 pub trait DownloadStore {
