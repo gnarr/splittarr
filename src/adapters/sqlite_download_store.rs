@@ -179,8 +179,9 @@ impl SqliteDownloadStore {
 
     fn load_download_stats_sync(&self) -> Result<DownloadStats> {
         let conn = self.connect()?;
-        let mut stmt = conn
-            .prepare("SELECT lifecycle_state, COUNT(*) FROM downloads GROUP BY lifecycle_state")?;
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(lifecycle_state, 'detected'), COUNT(*) FROM downloads GROUP BY lifecycle_state",
+        )?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;
