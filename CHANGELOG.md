@@ -1,6 +1,17 @@
 # Changelog
 
 - - -
+## [v0.4.0](https://github.com/gnarr/splittarr/compare/65c6f1eab5f055eacc9806d8eadfdb86a9210ddd..v0.4.0) - 2026-06-17
+#### Features
+- (**lidarr**) add disc-aware manual import fallback - ([7b1d3ab](https://github.com/gnarr/splittarr/commit/7b1d3ab2d809a8d6169eb3fdc1f90ce80c26854d)) - Gunnar Cortes
+- (**lidarr**) trigger manual import after splitting - ([65c6f1e](https://github.com/gnarr/splittarr/commit/65c6f1eab5f055eacc9806d8eadfdb86a9210ddd)) - Gunnar Cortes
+#### Bug Fixes
+- (**lidarr**) parse cue hints from lossy paths - ([9b3d6f9](https://github.com/gnarr/splittarr/commit/9b3d6f96923961ccd58a1a410019dea23d37393b)) - Gunnar Cortes
+- (**lidarr**) include existing split tracks in manual import - ([733dafe](https://github.com/gnarr/splittarr/commit/733dafe2192198405ff99013160757297a08da38)) - Gunnar Cortes
+- handle cleanup and lookup edge cases - ([90ffbf9](https://github.com/gnarr/splittarr/commit/90ffbf964c31146fe89413b8c002c3609ae475b7)) - Gunnar Cortes
+
+- - -
+
 ## [v0.3.5](https://github.com/gnarr/splittarr/compare/4f8848b2ff62dce95a6df32bb46cbe4df144c43f..v0.3.5) - 2026-06-13
 #### Bug Fixes
 - (**shnsplit**) reconcile generated track outputs (#27) - ([4f8848b](https://github.com/gnarr/splittarr/commit/4f8848b2ff62dce95a6df32bb46cbe4df144c43f)) - Gunnar Cortes
