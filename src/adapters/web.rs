@@ -16,13 +16,21 @@ use crate::domain::{
 #[derive(Clone)]
 pub struct StatusConfig {
     pub version: &'static str,
-    pub lidarr_url: String,
+    pub data_dir: String,
     pub check_frequency_seconds: u64,
+    pub download_log_enabled: bool,
+    pub lidarr_url: String,
     pub manual_import_enabled: bool,
     pub musicbrainz_enabled: bool,
+    pub musicbrainz_base_url: String,
+    pub musicbrainz_trust_disc_lookup: bool,
+    pub musicbrainz_add_missing_release_group: bool,
     pub gnudb_enabled: bool,
+    pub gnudb_server: String,
     pub cue_strict: bool,
-    pub download_log_enabled: bool,
+    pub shnsplit_path: String,
+    pub shnsplit_overwrite: bool,
+    pub shnsplit_format: String,
 }
 
 #[derive(Clone)]
@@ -223,42 +231,92 @@ fn page(title: &str, body: Markup) -> String {
 
 fn status_content(config: &StatusConfig, stats: &DownloadStats) -> Markup {
     html! {
-        section class="panel grid" {
-            div {
-                strong { "Version" }
-                span { (config.version) }
-            }
-            div {
-                strong { "Lidarr URL" }
-                span class="path" { (&config.lidarr_url) }
-            }
-            div {
-                strong { "Check frequency" }
-                span { (config.check_frequency_seconds) " s" }
+        section class="panel" {
+            h2 { "General" }
+            div class="grid" {
+                div {
+                    strong { "Version" }
+                    span { (config.version) }
+                }
+                div {
+                    strong { "Check frequency" }
+                    span { (config.check_frequency_seconds) " s" }
+                }
+                div {
+                    strong { "Download logging" }
+                    (feature_badge(config.download_log_enabled))
+                }
+                div class="wide" {
+                    strong { "Data directory" }
+                    span class="path" { (&config.data_dir) }
+                }
             }
         }
         section class="panel" {
-            h2 { "Features" }
+            h2 { "Lidarr" }
             div class="grid" {
                 div {
                     strong { "Manual import" }
                     (feature_badge(config.manual_import_enabled))
                 }
+                div class="wide" {
+                    strong { "URL" }
+                    span class="path" { (&config.lidarr_url) }
+                }
+            }
+        }
+        section class="panel" {
+            h2 { "MusicBrainz" }
+            div class="grid" {
                 div {
-                    strong { "MusicBrainz disc lookup" }
+                    strong { "Disc lookup" }
                     (feature_badge(config.musicbrainz_enabled))
                 }
                 div {
-                    strong { "GnuDB disc lookup" }
+                    strong { "Trust disc lookup" }
+                    (feature_badge(config.musicbrainz_trust_disc_lookup))
+                }
+                div {
+                    strong { "Add missing release group" }
+                    (feature_badge(config.musicbrainz_add_missing_release_group))
+                }
+                div class="wide" {
+                    strong { "Base URL" }
+                    span class="path" { (&config.musicbrainz_base_url) }
+                }
+            }
+        }
+        section class="panel" {
+            h2 { "GnuDB" }
+            div class="grid" {
+                div {
+                    strong { "Disc lookup" }
                     (feature_badge(config.gnudb_enabled))
+                }
+                div {
+                    strong { "Server" }
+                    span class=(if config.gnudb_enabled { "path" } else { "path muted" }) { (&config.gnudb_server) }
+                }
+            }
+        }
+        section class="panel" {
+            h2 { "shnsplit" }
+            div class="grid" {
+                div {
+                    strong { "Overwrite" }
+                    (feature_badge(config.shnsplit_overwrite))
                 }
                 div {
                     strong { "Strict CUE mode" }
                     (feature_badge(config.cue_strict))
                 }
                 div {
-                    strong { "Download logging" }
-                    (feature_badge(config.download_log_enabled))
+                    strong { "Output format" }
+                    code { (&config.shnsplit_format) }
+                }
+                div class="wide" {
+                    strong { "Path" }
+                    span class="path" { (&config.shnsplit_path) }
                 }
             }
         }
@@ -727,13 +785,21 @@ mod tests {
     fn fake_status_config() -> StatusConfig {
         StatusConfig {
             version: "0.0.0-test",
-            lidarr_url: "http://lidarr:8686".into(),
+            data_dir: "/config".into(),
             check_frequency_seconds: 60,
+            download_log_enabled: true,
+            lidarr_url: "http://lidarr:8686".into(),
             manual_import_enabled: true,
             musicbrainz_enabled: true,
+            musicbrainz_base_url: "https://musicbrainz.org".into(),
+            musicbrainz_trust_disc_lookup: false,
+            musicbrainz_add_missing_release_group: false,
             gnudb_enabled: false,
+            gnudb_server: "gnudb.gnudb.org".into(),
             cue_strict: false,
-            download_log_enabled: true,
+            shnsplit_path: "shnsplit".into(),
+            shnsplit_overwrite: true,
+            shnsplit_format: "%p - %a - %n - %t".into(),
         }
     }
 
