@@ -6,37 +6,39 @@ use chrono::prelude::*;
 use crate::application::cleanup_processed_download::cleanup_processed_download;
 use crate::application::monitor_download_queue::classify_downloads;
 use crate::application::ports::{
-    CueInputInspector, CueScanner, CueSplitter, DownloadStore, ManualImportTrigger, QueueSource,
-    TrackCleanup,
+    CueInputInspector, CueScanner, CueSplitter, DownloadLog, DownloadStore, ManualImportTrigger,
+    QueueSource, TrackCleanup,
 };
 use crate::application::process_tracked_download::{
     process_tracked_download, register_failed_imports,
 };
 
-pub struct MonitorService<Q, S, C, I, P, M, X> {
+pub struct MonitorService<Q, S, C, I, P, M, L, X> {
     queue_source: Q,
     download_store: S,
     cue_scanner: C,
     cue_input_inspector: I,
     cue_splitter: P,
     manual_import: M,
+    download_log: L,
     track_cleanup: X,
     check_frequency_seconds: u64,
 }
 
-pub struct ProcessingAdapters<C, I, P, M, X> {
+pub struct ProcessingAdapters<C, I, P, M, L, X> {
     pub cue_scanner: C,
     pub cue_input_inspector: I,
     pub cue_splitter: P,
     pub manual_import: M,
+    pub download_log: L,
     pub track_cleanup: X,
 }
 
-impl<Q, S, C, I, P, M, X> MonitorService<Q, S, C, I, P, M, X> {
+impl<Q, S, C, I, P, M, L, X> MonitorService<Q, S, C, I, P, M, L, X> {
     pub fn new(
         queue_source: Q,
         download_store: S,
-        adapters: ProcessingAdapters<C, I, P, M, X>,
+        adapters: ProcessingAdapters<C, I, P, M, L, X>,
         check_frequency_seconds: u64,
     ) -> Self {
         Self {
@@ -46,13 +48,14 @@ impl<Q, S, C, I, P, M, X> MonitorService<Q, S, C, I, P, M, X> {
             cue_input_inspector: adapters.cue_input_inspector,
             cue_splitter: adapters.cue_splitter,
             manual_import: adapters.manual_import,
+            download_log: adapters.download_log,
             track_cleanup: adapters.track_cleanup,
             check_frequency_seconds,
         }
     }
 }
 
-impl<Q, S, C, I, P, M, X> MonitorService<Q, S, C, I, P, M, X>
+impl<Q, S, C, I, P, M, L, X> MonitorService<Q, S, C, I, P, M, L, X>
 where
     Q: QueueSource,
     S: DownloadStore,
@@ -60,6 +63,7 @@ where
     I: CueInputInspector,
     P: CueSplitter,
     M: ManualImportTrigger,
+    L: DownloadLog,
     X: TrackCleanup,
 {
     pub async fn run(&self) -> Result<()> {
@@ -125,6 +129,7 @@ where
                 &self.cue_input_inspector,
                 &self.cue_splitter,
                 &self.manual_import,
+                &self.download_log,
                 download.clone(),
             )
             .await
@@ -139,9 +144,13 @@ where
 
         for download in to_cleanup {
             println!("Cleaning up {}", download.title);
-            if let Err(err) =
-                cleanup_processed_download(&self.download_store, &self.track_cleanup, &download)
-                    .await
+            if let Err(err) = cleanup_processed_download(
+                &self.download_store,
+                &self.track_cleanup,
+                &self.download_log,
+                &download,
+            )
+            .await
             {
                 eprintln!("Failed cleaning up {}: {err:#}", download.title);
             }
@@ -164,8 +173,8 @@ mod tests {
     use crate::adapters::sqlite_download_store::SqliteDownloadStore;
     use crate::application::ports::{
         CueInputInspector, CueInputSnapshot, CueReferencedAudioInput, CueScanner, CueSplitter,
-        DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger, QueueSource,
-        TrackCleanup,
+        DownloadLog, DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
+        QueueSource, TrackCleanup,
     };
     use crate::domain::{
         DiscoveredCueSheets, DownloadLifecycleState, FailedImportCandidate, QueueSnapshot,
@@ -276,6 +285,25 @@ mod tests {
         }
     }
 
+    struct FakeDownloadLog;
+
+    impl DownloadLog for FakeDownloadLog {
+        async fn write_download_log(
+            &self,
+            _download: &crate::domain::TrackedDownload,
+            _content: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn delete_download_log(
+            &self,
+            _download: &crate::domain::TrackedDownload,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn run_once_processes_then_completes_without_deleting_history() {
         let tmp = tempdir().unwrap();
@@ -332,6 +360,7 @@ FILE "album.flac" WAVE
                     output_track: split_track.clone(),
                 },
                 manual_import: FakeManualImport,
+                download_log: FakeDownloadLog,
                 track_cleanup: FakeCleanup,
             },
             60,

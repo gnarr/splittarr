@@ -3,13 +3,18 @@ mod application;
 mod bootstrap;
 mod domain;
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 
 use crate::adapters::filesystem_cleanup::FilesystemTrackCleanup;
 use crate::adapters::filesystem_cue_input_inspector::FilesystemCueInputInspector;
 use crate::adapters::filesystem_cue_scanner::FilesystemCueScanner;
+use crate::adapters::filesystem_download_log::FilesystemDownloadLog;
+use crate::adapters::gnudb_api::GnudbDiscReleaseLookup;
 use crate::adapters::lidarr_api::LidarrQueueSource;
+use crate::adapters::musicbrainz_api::FilesystemMusicBrainzDiscReleaseLookup;
 use crate::adapters::shnsplit_splitter::ShnsplitCueSplitter;
 use crate::adapters::sqlite_download_store::SqliteDownloadStore;
 use crate::adapters::web;
@@ -20,13 +25,24 @@ use crate::bootstrap::settings::{Cli, Settings};
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let settings = Settings::load(cli.config).context("load settings")?;
-    let queue_source = LidarrQueueSource::new(&settings.lidarr);
+    let disc_release_lookup = Arc::new(GnudbDiscReleaseLookup::new(&settings.gnudb));
+    let musicbrainz_lookup = Arc::new(FilesystemMusicBrainzDiscReleaseLookup::new(
+        &settings.musicbrainz,
+    ));
+    let queue_source = LidarrQueueSource::new(&settings.lidarr)
+        .with_musicbrainz_disc_release_lookup(musicbrainz_lookup)
+        .with_musicbrainz_trust_disc_lookup(settings.musicbrainz.trust_disc_lookup)
+        .with_musicbrainz_add_missing_release_group(
+            settings.musicbrainz.add_missing_release_group_enabled,
+        )
+        .with_disc_release_lookup(disc_release_lookup);
     let manual_import = queue_source.clone();
     let download_store =
         SqliteDownloadStore::open(&settings.data_dir).context("initialize Splittarr database")?;
     let web_store = download_store.clone();
     let cue_scanner = FilesystemCueScanner::new();
     let cue_input_inspector = FilesystemCueInputInspector::new();
+    let download_log = FilesystemDownloadLog::new(settings.logging.download_log_enabled);
     let cue_splitter = ShnsplitCueSplitter::new(
         settings.cue.strict,
         settings.shnsplit.path.clone(),
@@ -42,6 +58,7 @@ async fn main() -> Result<()> {
             cue_input_inspector,
             cue_splitter,
             manual_import,
+            download_log,
             track_cleanup,
         },
         settings.check_frequency_seconds,

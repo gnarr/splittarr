@@ -90,6 +90,11 @@ services:
       SPLITTARR_DATA_DIR: /config
       SPLITTARR_CHECK_FREQUENCY_SECONDS: 60
       SPLITTARR_SERVER__BIND_ADDRESS: 127.0.0.1:9899
+      SPLITTARR_LOGGING__DOWNLOAD_LOG_ENABLED: "true"
+      SPLITTARR_LIDARR__MANUAL_IMPORT_ENABLED: "false"
+      SPLITTARR_GNUDB__DISC_LOOKUP_ENABLED: "false"
+      SPLITTARR_GNUDB__SERVER: gnudb.gnudb.org
+      SPLITTARR_GNUDB__USER_EMAIL: ""
       SPLITTARR_CUE__STRICT: "false"
       SPLITTARR_SHNSPLIT__PATH: shnsplit
       SPLITTARR_SHNSPLIT__OVERWRITE: "true"
@@ -132,10 +137,26 @@ check_frequency_seconds = 60
 [server]
 bind_address = "127.0.0.1:9899"
 
+[logging]
+download_log_enabled = true
+
+[gnudb]
+disc_lookup_enabled = false
+# Use "gnudb.gnudb.org", your signup host like "7vrcg0sd.gnudb.org",
+# or just the unique signup code like "7vrcg0sd".
+server = "gnudb.gnudb.org"
+user_email = ""
+
+[musicbrainz]
+disc_lookup_enabled = true
+base_url = "https://musicbrainz.org"
+trust_disc_lookup = false
+add_missing_release_group_enabled = false
+
 [lidarr]
 url = "http://lidarr:8686"
 api_key = "your-lidarr-api-key"
-manual_import_enabled = false
+manual_import_enabled = true
 
 [cue]
 strict = false
@@ -165,7 +186,15 @@ Nested configuration keys use a double underscore.
 ```bash
 export SPLITTARR_LIDARR__URL=http://lidarr:8686
 export SPLITTARR_LIDARR__API_KEY=your-lidarr-api-key
-export SPLITTARR_LIDARR__MANUAL_IMPORT_ENABLED=false
+export SPLITTARR_LIDARR__MANUAL_IMPORT_ENABLED=true
+export SPLITTARR_LOGGING__DOWNLOAD_LOG_ENABLED=true
+export SPLITTARR_GNUDB__DISC_LOOKUP_ENABLED=false
+export SPLITTARR_GNUDB__SERVER=gnudb.gnudb.org
+export SPLITTARR_GNUDB__USER_EMAIL=user@example.com
+export SPLITTARR_MUSICBRAINZ__DISC_LOOKUP_ENABLED=true
+export SPLITTARR_MUSICBRAINZ__BASE_URL=https://musicbrainz.org
+export SPLITTARR_MUSICBRAINZ__TRUST_DISC_LOOKUP=false
+export SPLITTARR_MUSICBRAINZ__ADD_MISSING_RELEASE_GROUP_ENABLED=false
 export SPLITTARR_CHECK_FREQUENCY_SECONDS=60
 export SPLITTARR_SERVER__BIND_ADDRESS=127.0.0.1:9899
 export SPLITTARR_SHNSPLIT__FORMAT="%p - %a - %n - %t"
@@ -180,13 +209,29 @@ splittarr
 | `data_dir`                | `SPLITTARR_DATA_DIR`                | platform data dir, `/config` in Docker | Directory used for Splittarr's SQLite database.            |
 | `check_frequency_seconds` | `SPLITTARR_CHECK_FREQUENCY_SECONDS` | `60`                                   | How often Splittarr polls Lidarr's queue.                  |
 | `server.bind_address`     | `SPLITTARR_SERVER__BIND_ADDRESS`    | `127.0.0.1:9899`                       | Address for the built-in web UI and health endpoint.       |
+| `logging.download_log_enabled` | `SPLITTARR_LOGGING__DOWNLOAD_LOG_ENABLED` | `true` | Whether Splittarr writes `splittarr.log` into processed download folders. |
+| `gnudb.disc_lookup_enabled` | `SPLITTARR_GNUDB__DISC_LOOKUP_ENABLED` | `false` | Whether Splittarr may use CUE `REM DISCID` values to ask GnuDB for release-selection hints. |
+| `gnudb.server`            | `SPLITTARR_GNUDB__SERVER`           | `gnudb.gnudb.org`                       | GnuDB hostname or signup code, for example `7vrcg0sd.gnudb.org` or `7vrcg0sd`. |
+| `gnudb.user_email`        | `SPLITTARR_GNUDB__USER_EMAIL`       | empty                                  | Email used in GnuDB's required `hello` field; required when GnuDB lookup is enabled. |
+| `musicbrainz.disc_lookup_enabled` | `SPLITTARR_MUSICBRAINZ__DISC_LOOKUP_ENABLED` | `true` | Whether Splittarr may calculate a MusicBrainz Disc ID from CUE/audio lengths and query MusicBrainz before GnuDB fallback. |
+| `musicbrainz.base_url` | `SPLITTARR_MUSICBRAINZ__BASE_URL` | `https://musicbrainz.org` | MusicBrainz base URL. |
+| `musicbrainz.trust_disc_lookup` | `SPLITTARR_MUSICBRAINZ__TRUST_DISC_LOOKUP` | `false` | Whether a successful MusicBrainz Disc ID match may override the initial CUE-title album match and choose another compatible Lidarr album/release for the same artist. |
+| `musicbrainz.add_missing_release_group_enabled` | `SPLITTARR_MUSICBRAINZ__ADD_MISSING_RELEASE_GROUP_ENABLED` | `false` | Whether Splittarr may add a missing Lidarr album for the same artist from a single MusicBrainz release-group Disc ID result before manual-import fallback gives up. |
 | `lidarr.url`              | `SPLITTARR_LIDARR__URL`             | required                               | Base URL for Lidarr, for example `http://lidarr:8686`.     |
 | `lidarr.api_key`          | `SPLITTARR_LIDARR__API_KEY`         | required                               | Lidarr API key.                                            |
-| `lidarr.manual_import_enabled` | `SPLITTARR_LIDARR__MANUAL_IMPORT_ENABLED` | `false` | Whether Splittarr should ask Lidarr to manually import generated tracks after splitting. |
+| `lidarr.manual_import_enabled` | `SPLITTARR_LIDARR__MANUAL_IMPORT_ENABLED` | `true` | Whether Splittarr should ask Lidarr to manually import generated tracks after splitting. |
 | `cue.strict`              | `SPLITTARR_CUE__STRICT`             | `false`                                | Whether CUE parsing should run in strict mode.             |
 | `shnsplit.path`           | `SPLITTARR_SHNSPLIT__PATH`          | `shnsplit`                             | Path to the `shnsplit` executable.                         |
 | `shnsplit.overwrite`      | `SPLITTARR_SHNSPLIT__OVERWRITE`     | `true`                                 | Whether `shnsplit` should overwrite existing output files. |
 | `shnsplit.format`         | `SPLITTARR_SHNSPLIT__FORMAT`        | `%p - %a - %n - %t`                    | Output filename format passed to `shnsplit -t`.            |
+
+MusicBrainz lookup is enabled by default. Splittarr reads referenced WAV/FLAC lengths, calculates a true MusicBrainz Disc ID, asks MusicBrainz `/ws/2/discid`, and selects a Lidarr release when MusicBrainz and Lidarr agree on a compatible release. If MusicBrainz is disabled or inconclusive, Splittarr falls back to GnuDB.
+
+`musicbrainz.trust_disc_lookup` is a stronger, separate opt-in. Leave it `false` if Splittarr should only use MusicBrainz as a release-ID tie breaker inside the album Lidarr already matched from the CUE/download title. Set it to `true` if you want a MusicBrainz Disc ID match to be trusted enough to search the same Lidarr artist for another album whose title matches the MusicBrainz release or release-group title. Even when enabled, Splittarr still requires compatible track counts and still runs the final generated-track-to-Lidarr-track mapping before starting manual import.
+
+`musicbrainz.add_missing_release_group_enabled` is disabled by default because it can change your Lidarr library. When enabled, if MusicBrainz Disc ID lookup returns releases that all belong to one release group and Splittarr cannot find a compatible Lidarr release, Splittarr asks Lidarr for `lidarr:<release-group-mbid>`, adds that album for the same artist as unmonitored, does not trigger a Lidarr search/download, and then tries the manual import again against the newly added album.
+
+GnuDB lookup only uses 8-character CDDB/freeDB-style `REM DISCID` values from CUE files. If GnuDB registration says to change `gnudb.gnudb.org` to `<code>.gnudb.org`, put either that hostname or just `<code>` in `gnudb.server`; Splittarr builds the required plain HTTP CDDB endpoint internally.
 
 ## Output filename format
 
