@@ -154,15 +154,30 @@ pub struct CueMetadataHint {
     pub album_title: Option<String>,
     pub performer: Option<String>,
     pub catalog: Option<String>,
+    pub disc_id: Option<String>,
     pub comments: Vec<(String, String)>,
     pub track_count: usize,
+    pub tracks: Vec<CueTrackHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CueTrackHint {
+    pub number: String,
+    pub title: Option<String>,
+    pub performer: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManualImportResult {
     Disabled,
-    Started { imported_track_count: usize },
-    Skipped { reason: String },
+    Started {
+        imported_track_count: usize,
+        diagnostic: String,
+    },
+    Skipped {
+        reason: String,
+        diagnostic: String,
+    },
 }
 
 pub trait ManualImportTrigger {
@@ -172,9 +187,133 @@ pub trait ManualImportTrigger {
     ) -> Result<ManualImportResult>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MusicBrainzDiscLookupRequest {
+    pub cue_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MusicBrainzDiscLookupResult {
+    Disabled {
+        diagnostic: String,
+    },
+    Found {
+        releases: Vec<MusicBrainzDiscRelease>,
+        diagnostic: String,
+    },
+    NotFound {
+        diagnostic: String,
+    },
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MusicBrainzDiscRelease {
+    pub id: String,
+    pub title: Option<String>,
+    pub date: Option<String>,
+    pub country: Option<String>,
+    pub status: Option<String>,
+    pub barcode: Option<String>,
+    pub quality: Option<String>,
+    pub media_count: usize,
+    pub media_formats: Vec<String>,
+    pub media_track_counts: Vec<usize>,
+    pub label_count: usize,
+    pub release_group_id: Option<String>,
+    pub release_group_title: Option<String>,
+    pub release_group_first_release_date: Option<String>,
+}
+
+#[async_trait]
+pub trait MusicBrainzDiscReleaseLookup: Send + Sync {
+    async fn lookup_musicbrainz_disc_releases(
+        &self,
+        request: MusicBrainzDiscLookupRequest,
+    ) -> Result<MusicBrainzDiscLookupResult>;
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct NoopMusicBrainzDiscReleaseLookup;
+
+#[async_trait]
+impl MusicBrainzDiscReleaseLookup for NoopMusicBrainzDiscReleaseLookup {
+    async fn lookup_musicbrainz_disc_releases(
+        &self,
+        _request: MusicBrainzDiscLookupRequest,
+    ) -> Result<MusicBrainzDiscLookupResult> {
+        Ok(MusicBrainzDiscLookupResult::Disabled {
+            diagnostic: "MusicBrainz lookup: disabled\n".into(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscReleaseLookupRequest {
+    pub disc_id: String,
+    pub artist: Option<String>,
+    pub album_title: Option<String>,
+    pub year: Option<i32>,
+    pub track_count: usize,
+    pub track_titles_by_number: Vec<(i64, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiscReleaseLookupResult {
+    Disabled {
+        diagnostic: String,
+    },
+    Found {
+        candidates: Vec<DiscReleaseCandidate>,
+        diagnostic: String,
+    },
+    NotFound {
+        diagnostic: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscReleaseCandidate {
+    pub category: String,
+    pub entry_id: String,
+    pub disc_id: String,
+    pub artist: Option<String>,
+    pub title: Option<String>,
+    pub year: Option<i32>,
+    pub track_titles: Vec<String>,
+    pub art_ids: Vec<String>,
+}
+
+#[async_trait]
+pub trait DiscReleaseLookup: Send + Sync {
+    async fn lookup_disc_release(
+        &self,
+        request: DiscReleaseLookupRequest,
+    ) -> Result<DiscReleaseLookupResult>;
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct NoopDiscReleaseLookup;
+
+#[async_trait]
+impl DiscReleaseLookup for NoopDiscReleaseLookup {
+    async fn lookup_disc_release(
+        &self,
+        _request: DiscReleaseLookupRequest,
+    ) -> Result<DiscReleaseLookupResult> {
+        Ok(DiscReleaseLookupResult::Disabled {
+            diagnostic: "GnuDB lookup: disabled\n".into(),
+        })
+    }
+}
+
 pub trait TrackCleanup {
     async fn cleanup_download_tracks(
         &self,
         download: &TrackedDownload,
     ) -> Result<Vec<TrackCleanupOutcome>>;
+}
+
+pub trait DownloadLog {
+    async fn write_download_log(&self, download: &TrackedDownload, content: &str) -> Result<()>;
+    async fn delete_download_log(&self, download: &TrackedDownload) -> Result<()>;
 }

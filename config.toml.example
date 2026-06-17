@@ -4,12 +4,28 @@ check_frequency_seconds = 60
 [server]
 bind_address = "127.0.0.1:9899"
 
+[logging]
+download_log_enabled = true
+
+[gnudb]
+disc_lookup_enabled = false
+# Use "gnudb.gnudb.org", your signup host like "4ckgj7jx.gnudb.org",
+# or just the unique signup code like "4ckgj7jx".
+server = "gnudb.gnudb.org"
+user_email = ""
+
+[musicbrainz]
+disc_lookup_enabled = true
+base_url = "https://musicbrainz.org"
+trust_disc_lookup = false
+add_missing_release_group_enabled = false
+
 [lidarr]
 url = "https://lidarr.example.com"
 api_key = "a3bb47a4968223c7568b06d4a2e9cf95"
 queue_page_size = 100
 queue_max_pages = 100
-manual_import_enabled = false
+manual_import_enabled = true
 
 [cue]
 strict = false

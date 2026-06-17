@@ -4,8 +4,8 @@ use anyhow::{anyhow, Result};
 use rcue::parser::parse_from_file;
 
 use crate::application::ports::{
-    CueInputInspector, CueMetadataHint, CueScanner, CueSplitter, DownloadStore,
-    ManualImportRequest, ManualImportTrigger,
+    CueInputInspector, CueInputSnapshot, CueMetadataHint, CueScanner, CueSplitter, DownloadLog,
+    DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
 };
 use crate::domain::{
     CueSheet, CueSheetStatus, FailedImportCandidate, InputFileKind, RecordedTrack, SplitOutcome,
@@ -44,12 +44,13 @@ pub async fn register_failed_imports<S: DownloadStore>(
     Ok(())
 }
 
-pub async fn process_tracked_download<S, C, I, P, M>(
+pub async fn process_tracked_download<S, C, I, P, M, L>(
     store: &S,
     scanner: &C,
     inspector: &I,
     splitter: &P,
     manual_import: &M,
+    download_log: &L,
     download: TrackedDownload,
 ) -> Result<()>
 where
@@ -58,12 +59,17 @@ where
     I: CueInputInspector,
     P: CueSplitter,
     M: ManualImportTrigger,
+    L: DownloadLog,
 {
     store
         .mark_download_processing(&download.download_id)
         .await?;
+    let mut log = initial_download_log(&download);
+    write_log_best_effort(download_log, &download, &log).await;
+
     let output_path = PathBuf::from(&download.output_path);
     let scan_root = scan_root_for(&output_path)?;
+    append_log_line(&mut log, format!("Scan root: {}", scan_root.display()));
     let mut scan = scanner.find_cue_sheets(&scan_root).await?;
 
     if output_path.is_file() {
@@ -72,12 +78,23 @@ where
             .await?;
     }
 
+    append_log_line(
+        &mut log,
+        format!("Discovered cue sheets: {}", scan.cue_files.len()),
+    );
+    for cue_path in &scan.cue_files {
+        append_log_line(&mut log, format!("  - {}", cue_path.display()));
+    }
     for error in &scan.errors {
         eprintln!("Scan warning for {}: {error}", download.title);
+        append_log_line(&mut log, format!("Scan warning: {error}"));
     }
 
     if scan.cue_files.is_empty() {
         eprintln!("Failed processing {}: no cue files found", download.title);
+        append_log_line(&mut log, "Final state: failed");
+        append_log_line(&mut log, "Failure: no cue files found");
+        write_log_best_effort(download_log, &download, &log).await;
         store
             .mark_download_failed(&download.download_id, Some("no cue files found"))
             .await?;
@@ -91,10 +108,12 @@ where
 
     for cue_path in scan.cue_files {
         cue_hints.push(cue_metadata_hint(&cue_path));
+        append_log_line(&mut log, "");
+        append_log_line(&mut log, format!("Cue: {}", cue_path.display()));
         let cue_sheet = store
             .get_or_create_cue_sheet(&download.download_id, &cue_path)
             .await?;
-        snapshot_input_files(
+        let snapshot = snapshot_input_files(
             store,
             inspector,
             &download.download_id,
@@ -102,8 +121,17 @@ where
             &cue_path,
         )
         .await?;
+        append_input_snapshot(&mut log, &snapshot);
 
         if cue_sheet.status.is_terminal_success() {
+            append_log_line(
+                &mut log,
+                format!(
+                    "Split status: already {:?}; using {} recorded track(s)",
+                    cue_sheet.status,
+                    cue_sheet.tracks.len()
+                ),
+            );
             generated_tracks.extend(
                 cue_sheet
                     .tracks
@@ -116,6 +144,20 @@ where
         match splitter.split_cue(&cue_path).await {
             Ok(result) => {
                 let tracks = result.tracks.clone();
+                append_log_line(
+                    &mut log,
+                    format!(
+                        "Split status: {:?}; generated {} track(s)",
+                        result.status,
+                        result.tracks.len()
+                    ),
+                );
+                if let Some(message) = &result.message {
+                    append_log_line(&mut log, format!("Split message: {message}"));
+                }
+                for track in &tracks {
+                    append_log_line(&mut log, format!("  generated: {}", track.display()));
+                }
                 store_split_result(store, inspector, &cue_sheet, result).await?;
                 generated_tracks.extend(tracks);
             }
@@ -128,6 +170,7 @@ where
                     cue_path.display()
                 );
                 failures.push(format!("{}: {message}", cue_path.display()));
+                append_log_line(&mut log, format!("Split failed: {message}"));
                 store
                     .record_cue_result(&cue_sheet, CueSheetStatus::Failed, Some(&message), &[])
                     .await?;
@@ -144,6 +187,12 @@ where
         store
             .mark_download_awaiting_import(&download.download_id)
             .await?;
+        append_log_line(&mut log, "");
+        append_log_line(&mut log, "Final processing state: awaiting_import");
+        append_log_line(
+            &mut log,
+            format!("Generated tracks total: {}", generated_tracks.len()),
+        );
         if !generated_tracks.is_empty() {
             let request = ManualImportRequest {
                 download: download.clone(),
@@ -151,27 +200,127 @@ where
                 cue_hints,
             };
             match manual_import.trigger_manual_import(request).await {
-                Ok(result) => println!("Manual import for {}: {result:?}", download.title),
+                Ok(result) => {
+                    println!("Manual import for {}: {result:?}", download.title);
+                    append_manual_import_result(&mut log, &result);
+                }
                 Err(err) => {
                     let message = format!("manual import trigger failed: {err}");
                     eprintln!(
                         "Manual import trigger failed for {}: {err:#}",
                         download.title
                     );
+                    append_log_line(&mut log, "");
+                    append_log_line(&mut log, "Manual import: failed");
+                    append_log_line(&mut log, format!("{err:#}"));
                     store
                         .record_download_warning(&download.download_id, &message)
                         .await?;
                 }
             }
+        } else {
+            append_log_line(
+                &mut log,
+                "Manual import: skipped because no generated tracks exist",
+            );
         }
     } else {
+        append_log_line(&mut log, "");
+        append_log_line(&mut log, "Final processing state: failed");
+        if let Some(error_message) = &error_message {
+            append_log_line(&mut log, format!("Failures: {error_message}"));
+        }
         store
             .mark_download_failed(&download.download_id, error_message.as_deref())
             .await?;
     }
 
+    write_log_best_effort(download_log, &download, &log).await;
     println!("Done processing {}", download.title);
     Ok(())
+}
+
+fn initial_download_log(download: &TrackedDownload) -> String {
+    let mut log = String::new();
+    append_log_line(&mut log, "Splittarr processing log");
+    append_log_line(&mut log, format!("Download ID: {}", download.download_id));
+    append_log_line(&mut log, format!("Title: {}", download.title));
+    append_log_line(&mut log, format!("Lidarr status: {}", download.status));
+    append_log_line(
+        &mut log,
+        format!("Tracked state: {}", download.tracked_download_state),
+    );
+    append_log_line(&mut log, format!("Output path: {}", download.output_path));
+    append_log_line(&mut log, "");
+    log
+}
+
+fn append_input_snapshot(log: &mut String, snapshot: &CueInputSnapshot) {
+    append_log_line(
+        log,
+        format!("Cue size bytes: {}", optional_i64(snapshot.cue_size_bytes)),
+    );
+    append_log_line(
+        log,
+        format!("Referenced audio inputs: {}", snapshot.audio_inputs.len()),
+    );
+    for input in &snapshot.audio_inputs {
+        append_log_line(
+            log,
+            format!(
+                "  audio: {} ({} bytes)",
+                input.path.display(),
+                optional_i64(input.size_bytes)
+            ),
+        );
+    }
+}
+
+fn append_manual_import_result(log: &mut String, result: &ManualImportResult) {
+    append_log_line(log, "");
+    match result {
+        ManualImportResult::Disabled => {
+            append_log_line(log, "Manual import: disabled");
+        }
+        ManualImportResult::Started {
+            imported_track_count,
+            diagnostic,
+        } => {
+            append_log_line(
+                log,
+                format!("Manual import: started for {imported_track_count} track(s)"),
+            );
+            append_log_line(log, diagnostic);
+        }
+        ManualImportResult::Skipped { reason, diagnostic } => {
+            append_log_line(log, format!("Manual import: skipped: {reason}"));
+            append_log_line(log, diagnostic);
+        }
+    }
+}
+
+fn append_log_line(log: &mut String, line: impl AsRef<str>) {
+    log.push_str(line.as_ref());
+    log.push('\n');
+}
+
+fn optional_i64(value: Option<i64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+async fn write_log_best_effort<L: DownloadLog>(
+    download_log: &L,
+    download: &TrackedDownload,
+    content: &str,
+) {
+    if let Err(err) = download_log.write_download_log(download, content).await {
+        eprintln!(
+            "Failed writing download log for {}: {err:#}",
+            download.title
+        );
+    }
 }
 
 fn cue_metadata_hint(cue_path: &Path) -> CueMetadataHint {
@@ -182,19 +331,42 @@ fn cue_metadata_hint(cue_path: &Path) -> CueMetadataHint {
             album_title: None,
             performer: None,
             catalog: None,
+            disc_id: None,
             comments: Vec::new(),
             track_count: 0,
+            tracks: Vec::new(),
         };
     };
+
+    let tracks = cue
+        .files
+        .iter()
+        .flat_map(|file| file.tracks.iter())
+        .map(|track| crate::application::ports::CueTrackHint {
+            number: track.no.clone(),
+            title: track.title.clone(),
+            performer: track.performer.clone(),
+        })
+        .collect::<Vec<_>>();
 
     CueMetadataHint {
         path: cue_path.to_path_buf(),
         album_title: cue.title,
         performer: cue.performer,
         catalog: cue.catalog,
+        disc_id: cue_comment_value(&cue.comments, "DISCID").map(str::to_owned),
         comments: cue.comments,
         track_count: cue.files.iter().map(|file| file.tracks.len()).sum(),
+        tracks,
     }
+}
+
+fn cue_comment_value<'a>(comments: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    comments
+        .iter()
+        .find(|(comment_key, _)| comment_key.eq_ignore_ascii_case(key))
+        .map(|(_, value)| value.trim())
+        .filter(|value| !value.is_empty())
 }
 
 async fn store_split_result<S: DownloadStore, I: CueInputInspector>(
@@ -225,7 +397,7 @@ async fn snapshot_input_files<S: DownloadStore, I: CueInputInspector>(
     download_id: &str,
     cue_sheet: &CueSheet,
     cue_path: &Path,
-) -> Result<()> {
+) -> Result<CueInputSnapshot> {
     let snapshot = inspector.snapshot_inputs(cue_path).await?;
     store
         .record_input_file(
@@ -237,7 +409,7 @@ async fn snapshot_input_files<S: DownloadStore, I: CueInputInspector>(
         )
         .await?;
 
-    for input in snapshot.audio_inputs {
+    for input in &snapshot.audio_inputs {
         store
             .record_input_file(
                 download_id,
@@ -249,7 +421,7 @@ async fn snapshot_input_files<S: DownloadStore, I: CueInputInspector>(
             .await?;
     }
 
-    Ok(())
+    Ok(snapshot)
 }
 
 fn scan_root_for(output_path: &Path) -> Result<PathBuf> {
@@ -279,7 +451,7 @@ mod tests {
     use super::process_tracked_download;
     use crate::application::ports::{
         CueInputInspector, CueInputSnapshot, CueReferencedAudioInput, CueScanner, CueSplitter,
-        DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
+        DownloadLog, DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
     };
     use crate::domain::{
         CueSheet, CueSheetStatus, DiscoveredCueSheets, GeneratedTrack, InputFileKind,
@@ -514,7 +686,28 @@ mod tests {
             }
             Ok(ManualImportResult::Started {
                 imported_track_count: 1,
+                diagnostic: "fake manual import diagnostic".into(),
             })
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeDownloadLog {
+        writes: Mutex<Vec<String>>,
+    }
+
+    impl DownloadLog for FakeDownloadLog {
+        async fn write_download_log(
+            &self,
+            _download: &TrackedDownload,
+            content: &str,
+        ) -> Result<()> {
+            self.writes.lock().unwrap().push(content.to_owned());
+            Ok(())
+        }
+
+        async fn delete_download_log(&self, _download: &TrackedDownload) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -542,6 +735,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         };
         let manual_import = FakeManualImport::default();
+        let download_log = FakeDownloadLog::default();
         let download = TrackedDownload::pending(
             "download-1".into(),
             "Single".into(),
@@ -556,6 +750,7 @@ mod tests {
             &inspector,
             &splitter,
             &manual_import,
+            &download_log,
             download,
         )
         .await
@@ -572,6 +767,11 @@ mod tests {
             .unwrap()
             .contains(&"awaiting_import".to_string()));
         assert_eq!(manual_import.calls.lock().unwrap().len(), 1);
+        let log_writes = download_log.writes.lock().unwrap();
+        assert!(log_writes
+            .last()
+            .unwrap()
+            .contains("fake manual import diagnostic"));
     }
 
     #[tokio::test]
@@ -598,6 +798,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         };
         let manual_import = FakeManualImport::default();
+        let download_log = FakeDownloadLog::default();
         let download = TrackedDownload::pending(
             "download-1".into(),
             "Single".into(),
@@ -612,6 +813,7 @@ mod tests {
             &inspector,
             &splitter,
             &manual_import,
+            &download_log,
             download,
         )
         .await
@@ -623,6 +825,13 @@ mod tests {
             store.last_error.lock().unwrap().as_deref(),
             Some("no cue files found")
         );
+        assert!(download_log
+            .writes
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .contains("Failure: no cue files found"));
     }
 
     #[tokio::test]
@@ -657,6 +866,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         };
         let manual_import = FakeManualImport::default();
+        let download_log = FakeDownloadLog::default();
         let download = TrackedDownload::pending(
             "download-1".into(),
             "Single".into(),
@@ -671,6 +881,7 @@ mod tests {
             &inspector,
             &splitter,
             &manual_import,
+            &download_log,
             download,
         )
         .await
@@ -723,6 +934,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         };
         let manual_import = FakeManualImport::default();
+        let download_log = FakeDownloadLog::default();
         let download = TrackedDownload::pending(
             "download-1".into(),
             "Album".into(),
@@ -737,6 +949,7 @@ mod tests {
             &inspector,
             &splitter,
             &manual_import,
+            &download_log,
             download,
         )
         .await
@@ -770,6 +983,7 @@ mod tests {
             fail: true,
             ..Default::default()
         };
+        let download_log = FakeDownloadLog::default();
         let download = TrackedDownload::pending(
             "download-1".into(),
             "Broken".into(),
@@ -784,6 +998,7 @@ mod tests {
             &inspector,
             &splitter,
             &manual_import,
+            &download_log,
             download,
         )
         .await
@@ -806,5 +1021,12 @@ mod tests {
             store.warnings.lock().unwrap().as_slice(),
             &["manual import trigger failed: lidarr is unavailable"]
         );
+        assert!(download_log
+            .writes
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .contains("Manual import: failed"));
     }
 }

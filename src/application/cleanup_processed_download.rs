@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 
-use crate::application::ports::{DownloadStore, TrackCleanup};
+use crate::application::ports::{DownloadLog, DownloadStore, TrackCleanup};
 use crate::domain::{TrackCleanupStatus, TrackedDownload};
 
-pub async fn cleanup_processed_download<S: DownloadStore, C: TrackCleanup>(
+pub async fn cleanup_processed_download<S: DownloadStore, C: TrackCleanup, L: DownloadLog>(
     store: &S,
     cleanup: &C,
+    download_log: &L,
     download: &TrackedDownload,
 ) -> Result<()> {
     store
@@ -41,6 +42,14 @@ pub async fn cleanup_processed_download<S: DownloadStore, C: TrackCleanup>(
         .with_context(|| format!("record cleanup results for {}", download.title))?;
 
     if failures.is_empty() {
+        if let Err(err) = download_log.delete_download_log(download).await {
+            let message = format!("download log cleanup failed for {}: {err}", download.title);
+            store
+                .mark_download_failed(&download.download_id, Some(&message))
+                .await
+                .context("mark download failed after log cleanup error")?;
+            return Err(err).context("delete download log");
+        }
         store
             .mark_download_completed(&download.download_id)
             .await
@@ -63,7 +72,7 @@ mod tests {
     use anyhow::Result;
 
     use super::cleanup_processed_download;
-    use crate::application::ports::{DownloadStore, TrackCleanup};
+    use crate::application::ports::{DownloadLog, DownloadStore, TrackCleanup};
     use crate::domain::{
         CueSheet, CueSheetStatus, DownloadLifecycleState, InputFileKind, RecordedTrack,
         TrackCleanupOutcome, TrackCleanupStatus, TrackedDownload,
@@ -185,10 +194,46 @@ mod tests {
         }
     }
 
+    struct SuccessfulCleanup;
+
+    impl TrackCleanup for SuccessfulCleanup {
+        async fn cleanup_download_tracks(
+            &self,
+            _download: &TrackedDownload,
+        ) -> Result<Vec<TrackCleanupOutcome>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeDownloadLog {
+        deletes: Mutex<usize>,
+        fail_delete: bool,
+    }
+
+    impl DownloadLog for FakeDownloadLog {
+        async fn write_download_log(
+            &self,
+            _download: &TrackedDownload,
+            _content: &str,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn delete_download_log(&self, _download: &TrackedDownload) -> Result<()> {
+            *self.deletes.lock().unwrap() += 1;
+            if self.fail_delete {
+                anyhow::bail!("delete failed");
+            }
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn delete_failed_without_message_marks_download_failed() {
         let store = FakeStore::default();
         let cleanup = FakeCleanup;
+        let log = FakeDownloadLog::default();
         let download = TrackedDownload {
             download_id: "download-1".into(),
             title: "Album".into(),
@@ -211,10 +256,11 @@ mod tests {
             last_error: None,
         };
 
-        cleanup_processed_download(&store, &cleanup, &download)
+        cleanup_processed_download(&store, &cleanup, &log, &download)
             .await
             .unwrap();
 
+        assert_eq!(*log.deletes.lock().unwrap(), 0);
         assert!(store.states.lock().unwrap().contains(&"failed".to_string()));
         assert_eq!(
             store.last_error.lock().unwrap().as_deref(),
@@ -226,6 +272,7 @@ mod tests {
     async fn cleanup_error_marks_download_failed() {
         let store = FakeStore::default();
         let cleanup = FailingCleanup;
+        let log = FakeDownloadLog::default();
         let download = TrackedDownload {
             download_id: "download-1".into(),
             title: "Album".into(),
@@ -248,15 +295,74 @@ mod tests {
             last_error: None,
         };
 
-        let err = cleanup_processed_download(&store, &cleanup, &download)
+        let err = cleanup_processed_download(&store, &cleanup, &log, &download)
             .await
             .unwrap_err();
 
+        assert_eq!(*log.deletes.lock().unwrap(), 0);
         assert!(err.to_string().contains("cleanup failed for Album"));
         assert!(store.states.lock().unwrap().contains(&"failed".to_string()));
         assert_eq!(
             store.last_error.lock().unwrap().as_deref(),
             Some("cleanup failed for Album: filesystem unavailable")
         );
+    }
+
+    #[tokio::test]
+    async fn successful_cleanup_deletes_download_log_before_completion() {
+        let store = FakeStore::default();
+        let cleanup = SuccessfulCleanup;
+        let log = FakeDownloadLog::default();
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Album".into(),
+            "completed".into(),
+            "/downloads/album".into(),
+            "importFailed".into(),
+        );
+
+        cleanup_processed_download(&store, &cleanup, &log, &download)
+            .await
+            .unwrap();
+
+        assert_eq!(*log.deletes.lock().unwrap(), 1);
+        assert!(store
+            .states
+            .lock()
+            .unwrap()
+            .contains(&"completed".to_string()));
+    }
+
+    #[tokio::test]
+    async fn download_log_delete_error_prevents_completion() {
+        let store = FakeStore::default();
+        let cleanup = SuccessfulCleanup;
+        let log = FakeDownloadLog {
+            fail_delete: true,
+            ..Default::default()
+        };
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Album".into(),
+            "completed".into(),
+            "/downloads/album".into(),
+            "importFailed".into(),
+        );
+
+        let err = cleanup_processed_download(&store, &cleanup, &log, &download)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("delete download log"));
+        assert!(store.states.lock().unwrap().contains(&"failed".to_string()));
+        assert_eq!(
+            store.last_error.lock().unwrap().as_deref(),
+            Some("download log cleanup failed for Album: delete failed")
+        );
+        assert!(!store
+            .states
+            .lock()
+            .unwrap()
+            .contains(&"completed".to_string()));
     }
 }
