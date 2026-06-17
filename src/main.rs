@@ -42,13 +42,21 @@ async fn main() -> Result<()> {
     let web_store = download_store.clone();
     let status_config = web::StatusConfig {
         version: env!("CARGO_PKG_VERSION"),
-        lidarr_url: settings.lidarr.url.clone(),
+        data_dir: settings.data_dir.to_string_lossy().into_owned(),
         check_frequency_seconds: settings.check_frequency_seconds,
+        download_log_enabled: settings.logging.download_log_enabled,
+        lidarr_url: settings.lidarr.url.clone(),
         manual_import_enabled: settings.lidarr.manual_import_enabled,
         musicbrainz_enabled: settings.musicbrainz.disc_lookup_enabled,
+        musicbrainz_base_url: settings.musicbrainz.base_url.clone(),
+        musicbrainz_trust_disc_lookup: settings.musicbrainz.trust_disc_lookup,
+        musicbrainz_add_missing_release_group: settings.musicbrainz.add_missing_release_group_enabled,
         gnudb_enabled: settings.gnudb.disc_lookup_enabled,
+        gnudb_server: settings.gnudb.server.clone(),
         cue_strict: settings.cue.strict,
-        download_log_enabled: settings.logging.download_log_enabled,
+        shnsplit_path: settings.shnsplit.path.to_string_lossy().into_owned(),
+        shnsplit_overwrite: settings.shnsplit.overwrite,
+        shnsplit_format: settings.shnsplit.format.clone(),
     };
     let cue_scanner = FilesystemCueScanner::new();
     let cue_input_inspector = FilesystemCueInputInspector::new();
