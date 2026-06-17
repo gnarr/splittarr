@@ -421,22 +421,23 @@ fn read_wav_file_length(path: &Path) -> Result<AudioFileLength> {
             .map_err(|err| anyhow!("failed to inspect WAV {}: {err}", path.display()))?;
 
         if chunk_id == b"fmt " {
-            let mut fmt = vec![0_u8; chunk_size as usize];
+            if chunk_size < 16 {
+                return Err(anyhow!("unsupported WAV fmt chunk for {}", path.display()));
+            }
+            let mut fmt = [0_u8; 16];
             file.read_exact(&mut fmt)
                 .map_err(|err| anyhow!("failed to read WAV fmt chunk {}: {err}", path.display()))?;
-            if fmt.len() < 16 {
-                return Err(anyhow!("unsupported WAV fmt chunk for {}", path.display()));
+            if chunk_size > 16 {
+                skip_wav_bytes(&mut file, chunk_size - 16, path, "WAV fmt extension")?;
             }
             format_tag = Some(u16::from_le_bytes([fmt[0], fmt[1]]));
             sample_rate = Some(u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]) as u64);
             block_align = Some(u16::from_le_bytes([fmt[12], fmt[13]]) as u64);
         } else if chunk_id == b"data" {
             data_size = Some(chunk_size);
-            file.seek(SeekFrom::Current(chunk_size as i64))
-                .map_err(|err| anyhow!("failed to skip WAV data {}: {err}", path.display()))?;
+            skip_wav_bytes(&mut file, chunk_size, path, "WAV data")?;
         } else {
-            file.seek(SeekFrom::Current(chunk_size as i64))
-                .map_err(|err| anyhow!("failed to skip WAV chunk {}: {err}", path.display()))?;
+            skip_wav_bytes(&mut file, chunk_size, path, "WAV chunk")?;
         }
 
         if chunk_size % 2 == 1 {
@@ -466,6 +467,14 @@ fn read_wav_file_length(path: &Path) -> Result<AudioFileLength> {
     let data_size =
         data_size.ok_or_else(|| anyhow!("WAV data chunk is missing for {}", path.display()))?;
     audio_length(path, data_size / block_align, sample_rate)
+}
+
+fn skip_wav_bytes(file: &mut File, bytes: u64, path: &Path, label: &str) -> Result<()> {
+    let offset = i64::try_from(bytes)
+        .map_err(|_| anyhow!("{label} is too large to skip for {}", path.display()))?;
+    file.seek(SeekFrom::Current(offset))
+        .map_err(|err| anyhow!("failed to skip {label} {}: {err}", path.display()))?;
+    Ok(())
 }
 
 fn audio_length(path: &Path, samples: u64, sample_rate: u64) -> Result<AudioFileLength> {
@@ -652,6 +661,55 @@ FILE "two.wav" WAVE
 
         assert_eq!(length.samples, 1234);
         assert_eq!(length.sample_rate, 44_100);
+    }
+
+    #[test]
+    fn wav_header_parsing_skips_fmt_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wav = tmp.path().join("album.wav");
+        let samples = 1234_u64;
+        let data_size = samples * 4;
+        let riff_size = 38 + data_size;
+        let mut file = File::create(&wav).unwrap();
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(riff_size as u32).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&18_u32.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&2_u16.to_le_bytes()).unwrap();
+        file.write_all(&44_100_u32.to_le_bytes()).unwrap();
+        file.write_all(&(44_100_u32 * 4).to_le_bytes()).unwrap();
+        file.write_all(&4_u16.to_le_bytes()).unwrap();
+        file.write_all(&16_u16.to_le_bytes()).unwrap();
+        file.write_all(&0_u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&(data_size as u32).to_le_bytes()).unwrap();
+
+        let length = read_wav_file_length(&wav).unwrap();
+
+        assert_eq!(length.samples, samples);
+        assert_eq!(length.sample_rate, 44_100);
+    }
+
+    #[test]
+    fn wav_header_parsing_rejects_huge_malformed_fmt_chunk_without_allocating_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wav = tmp.path().join("album.wav");
+        let mut file = File::create(&wav).unwrap();
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&36_u32.to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&u32::MAX.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&2_u16.to_le_bytes()).unwrap();
+        file.write_all(&44_100_u32.to_le_bytes()).unwrap();
+        file.write_all(&(44_100_u32 * 4).to_le_bytes()).unwrap();
+        file.write_all(&4_u16.to_le_bytes()).unwrap();
+        file.write_all(&16_u16.to_le_bytes()).unwrap();
+
+        let err = read_wav_file_length(&wav).unwrap_err().to_string();
+
+        assert!(err.contains("WAV data chunk is missing"));
     }
 
     #[test]

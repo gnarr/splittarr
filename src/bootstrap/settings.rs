@@ -78,7 +78,7 @@ pub enum SettingsError {
     MissingProjectDirs,
     #[error(transparent)]
     Config(#[from] ConfigError),
-    #[error("gnudb.user_email is required when gnudb.disc_lookup_enabled is true")]
+    #[error("gnudb.user_email must be a valid email when gnudb.disc_lookup_enabled is true")]
     MissingGnudbUserEmail,
     #[error("gnudb.server must be a hostname or unique code, not a URL or path: {0}")]
     InvalidGnudbServer(String),
@@ -155,11 +155,18 @@ impl Settings {
 
 fn normalize_musicbrainz_base_url(value: &str) -> Result<String, SettingsError> {
     let value = value.trim().trim_end_matches('/');
-    if value.starts_with("http://") || value.starts_with("https://") {
-        Ok(value.to_owned())
-    } else {
-        Err(SettingsError::InvalidMusicBrainzBaseUrl(value.to_owned()))
+    if !value.starts_with("http://") && !value.starts_with("https://") {
+        return Err(SettingsError::InvalidMusicBrainzBaseUrl(value.to_owned()));
     }
+
+    let Some(origin) = value.split("://").nth(1) else {
+        return Err(SettingsError::InvalidMusicBrainzBaseUrl(value.to_owned()));
+    };
+    if origin.is_empty() || origin.contains('/') || origin.contains('?') || origin.contains('#') {
+        return Err(SettingsError::InvalidMusicBrainzBaseUrl(value.to_owned()));
+    }
+
+    Ok(value.to_owned())
 }
 
 fn normalize_gnudb_server(value: &str) -> Result<String, SettingsError> {
@@ -413,6 +420,32 @@ api_key = "secret"
             normalize_gnudb_server("gnudb.gnudb.org/~cddb/cddb.cgi"),
             Err(SettingsError::InvalidGnudbServer(_))
         ));
+    }
+
+    #[test]
+    fn musicbrainz_base_url_normalizes_origin() {
+        assert_eq!(
+            normalize_musicbrainz_base_url("https://musicbrainz.org/").unwrap(),
+            "https://musicbrainz.org"
+        );
+        assert_eq!(
+            normalize_musicbrainz_base_url("http://musicbrainz.example").unwrap(),
+            "http://musicbrainz.example"
+        );
+    }
+
+    #[test]
+    fn musicbrainz_base_url_rejects_path_query_or_fragment() {
+        for value in [
+            "https://musicbrainz.org/ws/2",
+            "https://musicbrainz.org?x=y",
+            "https://musicbrainz.org#fragment",
+        ] {
+            assert!(matches!(
+                normalize_musicbrainz_base_url(value),
+                Err(SettingsError::InvalidMusicBrainzBaseUrl(_))
+            ));
+        }
     }
 
     #[test]

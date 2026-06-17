@@ -44,11 +44,16 @@ pub async fn cleanup_processed_download<S: DownloadStore, C: TrackCleanup, L: Do
     if failures.is_empty() {
         if let Err(err) = download_log.delete_download_log(download).await {
             let message = format!("download log cleanup failed for {}: {err}", download.title);
-            store
-                .mark_download_failed(&download.download_id, Some(&message))
+            eprintln!("{message}");
+            if let Err(warning_err) = store
+                .record_download_warning(&download.download_id, &message)
                 .await
-                .context("mark download failed after log cleanup error")?;
-            return Err(err).context("delete download log");
+            {
+                eprintln!(
+                    "Failed recording download log cleanup warning for {}: {warning_err:#}",
+                    download.title
+                );
+            }
         }
         store
             .mark_download_completed(&download.download_id)
@@ -82,6 +87,7 @@ mod tests {
     struct FakeStore {
         states: Mutex<Vec<String>>,
         last_error: Mutex<Option<String>>,
+        warnings: Mutex<Vec<String>>,
     }
 
     impl DownloadStore for FakeStore {
@@ -125,6 +131,11 @@ mod tests {
         ) -> Result<()> {
             self.states.lock().unwrap().push("failed".into());
             *self.last_error.lock().unwrap() = last_error.map(str::to_owned);
+            Ok(())
+        }
+
+        async fn record_download_warning(&self, _download_id: &str, message: &str) -> Result<()> {
+            self.warnings.lock().unwrap().push(message.to_owned());
             Ok(())
         }
 
@@ -334,7 +345,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn download_log_delete_error_prevents_completion() {
+    async fn download_log_delete_error_records_warning_and_completes() {
         let store = FakeStore::default();
         let cleanup = SuccessfulCleanup;
         let log = FakeDownloadLog {
@@ -349,17 +360,17 @@ mod tests {
             "importFailed".into(),
         );
 
-        let err = cleanup_processed_download(&store, &cleanup, &log, &download)
+        cleanup_processed_download(&store, &cleanup, &log, &download)
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(err.to_string().contains("delete download log"));
-        assert!(store.states.lock().unwrap().contains(&"failed".to_string()));
+        assert_eq!(*log.deletes.lock().unwrap(), 1);
+        assert!(!store.states.lock().unwrap().contains(&"failed".to_string()));
         assert_eq!(
-            store.last_error.lock().unwrap().as_deref(),
+            store.warnings.lock().unwrap().first().map(String::as_str),
             Some("download log cleanup failed for Album: delete failed")
         );
-        assert!(!store
+        assert!(store
             .states
             .lock()
             .unwrap()
