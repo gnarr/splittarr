@@ -77,11 +77,10 @@ where
             },
         ))
         .into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to load status: {error}"),
-        )
-            .into_response(),
+        Err(error) => {
+            eprintln!("failed to load status: {error:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+        }
     }
 }
 
@@ -125,11 +124,10 @@ where
             },
         ))
         .into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to load downloads: {error}"),
-        )
-            .into_response(),
+        Err(error) => {
+            eprintln!("failed to load downloads: {error:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+        }
     }
 }
 
@@ -143,11 +141,10 @@ where
     match state.store.load_download_row(&download_id).await {
         Ok(Some(download)) => download_row(&download).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "download not found").into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to load download row: {error}"),
-        )
-            .into_response(),
+        Err(error) => {
+            eprintln!("failed to load download row: {error:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+        }
     }
 }
 
@@ -157,11 +154,10 @@ where
 {
     match state.store.load_download_rows().await {
         Ok(downloads) => download_rows(&downloads).into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to load download rows: {error}"),
-        )
-            .into_response(),
+        Err(error) => {
+            eprintln!("failed to load download rows: {error:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+        }
     }
 }
 
@@ -185,11 +181,10 @@ where
         ))
         .into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "download not found").into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to load download detail: {error}"),
-        )
-            .into_response(),
+        Err(error) => {
+            eprintln!("failed to load download detail: {error:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+        }
     }
 }
 
@@ -203,11 +198,10 @@ where
     match state.store.get_tracked_download(&download_id).await {
         Ok(Some(download)) => download_content(&download).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "download not found").into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to load download detail content: {error}"),
-        )
-            .into_response(),
+        Err(error) => {
+            eprintln!("failed to load download detail content: {error:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+        }
     }
 }
 
@@ -916,5 +910,29 @@ mod tests {
         assert!(rendered.contains("download-row-abc"));
         assert!(rendered.contains("/downloads/abc"));
         assert!(rendered.contains("0"));
+    }
+
+    #[tokio::test]
+    async fn status_page_renders_config_and_stats() {
+        let app = router(FakeReadStore::default(), fake_status_config());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rendered = String::from_utf8(body.to_vec()).unwrap();
+        assert!(rendered.contains("0.0.0-test"));
+        assert!(rendered.contains("http://lidarr:8686"));
+        assert!(rendered.contains("gnudb.gnudb.org"));
+        assert!(rendered.contains("%p - %a - %n - %t"));
+        assert!(rendered.contains("Download History"));
     }
 }

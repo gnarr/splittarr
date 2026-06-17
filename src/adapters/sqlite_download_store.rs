@@ -182,18 +182,20 @@ impl SqliteDownloadStore {
         let mut stmt = conn
             .prepare("SELECT lifecycle_state, COUNT(*) FROM downloads GROUP BY lifecycle_state")?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;
         let mut stats = DownloadStats::default();
         for row in rows {
             let (state, count) = row?;
+            let count = count as usize;
             stats.total += count;
-            match state.as_str() {
-                "completed" => stats.completed += count,
-                "failed" => stats.failed += count,
-                "awaiting_import" => stats.awaiting_import += count,
-                "detected" | "processing" | "cleaning_up" => stats.in_progress += count,
-                _ => {}
+            match download_lifecycle_state_from_db(&state) {
+                DownloadLifecycleState::Completed => stats.completed += count,
+                DownloadLifecycleState::Failed => stats.failed += count,
+                DownloadLifecycleState::AwaitingImport => stats.awaiting_import += count,
+                DownloadLifecycleState::Detected
+                | DownloadLifecycleState::Processing
+                | DownloadLifecycleState::CleaningUp => stats.in_progress += count,
             }
         }
         Ok(stats)
