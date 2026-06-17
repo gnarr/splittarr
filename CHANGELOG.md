@@ -1,6 +1,16 @@
 # Changelog
 
 - - -
+## [v0.5.0](https://github.com/gnarr/splittarr/compare/6e584755c150adbb27022be2b1d400e8aa5bb2ee..v0.5.0) - 2026-06-17
+#### Features
+- (**web**) show detailed status configuration - ([2bfaee0](https://github.com/gnarr/splittarr/commit/2bfaee0ceae8fcbcdfaff57b4c5755fc9e2523df)) - Gunnar Cortes
+- (**web**) add status page - ([6e58475](https://github.com/gnarr/splittarr/commit/6e584755c150adbb27022be2b1d400e8aa5bb2ee)) - Gunnar Cortes
+#### Bug Fixes
+- (**sqlite**) count downloads with missing lifecycle state - ([ae55171](https://github.com/gnarr/splittarr/commit/ae5517187b4ea147a2833da0289f0739fdbda385)) - Gunnar Cortes
+- (**web**) hide internal errors from status pages - ([766cb42](https://github.com/gnarr/splittarr/commit/766cb42fd6e3b6a7034c608fc1979ad17acdb508)) - Gunnar Cortes
+
+- - -
+
 ## [v0.4.0](https://github.com/gnarr/splittarr/compare/65c6f1eab5f055eacc9806d8eadfdb86a9210ddd..v0.4.0) - 2026-06-17
 #### Features
 - (**lidarr**) add disc-aware manual import fallback - ([7b1d3ab](https://github.com/gnarr/splittarr/commit/7b1d3ab2d809a8d6169eb3fdc1f90ce80c26854d)) - Gunnar Cortes
