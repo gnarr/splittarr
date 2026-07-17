@@ -1,17 +1,13 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
 use anyhow::{anyhow, Result};
-use encoding_rs::{WINDOWS_1250, WINDOWS_1251};
-use rcue::cue::Cue;
-use rcue::parser::parse;
 use regex::bytes::Regex;
-use tempfile::{Builder, TempPath};
 
+use crate::adapters::cue_file::prepare_cue;
 use crate::application::ports::CueSplitter;
 use crate::domain::{SplitOutcome, SplitStatus};
 
@@ -141,132 +137,6 @@ impl ShnsplitCueSplitter {
             message: None,
         })
     }
-}
-
-struct PreparedCue {
-    cue: Cue,
-    command_path: PathBuf,
-    _temporary_path: Option<TempPath>,
-}
-
-fn prepare_cue(cue_path: &Path, cue_dir: &Path, strict: bool) -> Result<PreparedCue> {
-    let bytes = fs::read(cue_path)
-        .map_err(|err| anyhow!("failed to read cue file {}: {err}", cue_path.display()))?;
-
-    match std::str::from_utf8(&bytes) {
-        Ok(decoded) => {
-            let cue = parse_decoded_cue(decoded, strict)
-                .map_err(|err| anyhow!("failed to parse cue file {}: {err}", cue_path.display()))?;
-            Ok(PreparedCue {
-                cue,
-                command_path: cue_path.to_path_buf(),
-                _temporary_path: None,
-            })
-        }
-        Err(utf8_error) => prepare_legacy_cue(cue_path, cue_dir, strict, &bytes, utf8_error),
-    }
-}
-
-fn prepare_legacy_cue(
-    cue_path: &Path,
-    cue_dir: &Path,
-    strict: bool,
-    bytes: &[u8],
-    utf8_error: std::str::Utf8Error,
-) -> Result<PreparedCue> {
-    let mut failures = Vec::new();
-
-    for encoding in [WINDOWS_1251, WINDOWS_1250] {
-        let label = encoding.name();
-        let (decoded, had_errors) = encoding.decode_without_bom_handling(bytes);
-        if had_errors {
-            failures.push(format!("{label}: decoding required replacement characters"));
-            continue;
-        }
-
-        let cue = match parse_decoded_cue(&decoded, strict) {
-            Ok(cue) => cue,
-            Err(err) => {
-                failures.push(format!("{label}: parse failed: {err}"));
-                continue;
-            }
-        };
-
-        if cue.files.is_empty() {
-            failures.push(format!("{label}: parsed no FILE references"));
-            continue;
-        }
-
-        let missing_files = missing_referenced_files(&cue, cue_dir);
-        if !missing_files.is_empty() {
-            failures.push(format!(
-                "{label}: referenced files do not exist: {}",
-                missing_files.join(", ")
-            ));
-            continue;
-        }
-
-        let temporary_path = write_temporary_utf8_cue(cue_dir, decoded.as_bytes(), cue_path)?;
-        let command_path = temporary_path.to_path_buf();
-        return Ok(PreparedCue {
-            cue,
-            command_path,
-            _temporary_path: Some(temporary_path),
-        });
-    }
-
-    Err(anyhow!(
-        "failed to decode legacy cue file {}: input is not valid UTF-8 ({utf8_error}); no candidate decoding resolved all FILE references ({})",
-        cue_path.display(),
-        failures.join("; ")
-    ))
-}
-
-fn parse_decoded_cue(
-    decoded: &str,
-    strict: bool,
-) -> std::result::Result<Cue, rcue::errors::CueError> {
-    let mut reader = Cursor::new(decoded.as_bytes());
-    parse(&mut reader, strict)
-}
-
-fn missing_referenced_files(cue: &Cue, cue_dir: &Path) -> Vec<String> {
-    cue.files
-        .iter()
-        .map(|file| file.file.as_str())
-        .filter(|file| !cue_dir.join(file).exists())
-        .map(str::to_owned)
-        .collect()
-}
-
-fn write_temporary_utf8_cue(
-    cue_dir: &Path,
-    decoded: &[u8],
-    original_cue_path: &Path,
-) -> Result<TempPath> {
-    let mut temporary = Builder::new()
-        .prefix(".splittarr-cue-")
-        .suffix(".cue")
-        .tempfile_in(cue_dir)
-        .map_err(|err| {
-            anyhow!(
-                "failed to create temporary UTF-8 cue for {}: {err}",
-                original_cue_path.display()
-            )
-        })?;
-    temporary.write_all(decoded).map_err(|err| {
-        anyhow!(
-            "failed to write temporary UTF-8 cue for {}: {err}",
-            original_cue_path.display()
-        )
-    })?;
-    temporary.flush().map_err(|err| {
-        anyhow!(
-            "failed to flush temporary UTF-8 cue for {}: {err}",
-            original_cue_path.display()
-        )
-    })?;
-    Ok(temporary.into_temp_path())
 }
 
 fn select_generated_tracks(
