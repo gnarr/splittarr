@@ -50,7 +50,9 @@ async fn main() -> Result<()> {
         musicbrainz_enabled: settings.musicbrainz.disc_lookup_enabled,
         musicbrainz_base_url: settings.musicbrainz.base_url.clone(),
         musicbrainz_trust_disc_lookup: settings.musicbrainz.trust_disc_lookup,
-        musicbrainz_add_missing_release_group: settings.musicbrainz.add_missing_release_group_enabled,
+        musicbrainz_add_missing_release_group: settings
+            .musicbrainz
+            .add_missing_release_group_enabled,
         gnudb_enabled: settings.gnudb.disc_lookup_enabled,
         gnudb_server: settings.gnudb.server.clone(),
         cue_strict: settings.cue.strict,
