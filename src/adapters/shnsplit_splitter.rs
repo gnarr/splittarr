@@ -356,7 +356,7 @@ fn sanitize_file_name_str(value: &str) -> String {
     let mut sanitized = String::with_capacity(value.len());
     let mut previous_was_underscore = false;
     for ch in value.chars() {
-        match ascii_replacement_for_char(ch) {
+        match filename_replacement_for_char(ch) {
             CharReplacement::Char(ch) => {
                 sanitized.push(ch);
                 previous_was_underscore = false;
@@ -411,16 +411,15 @@ enum CharReplacement {
     Underscore,
 }
 
-fn ascii_replacement_for_char(ch: char) -> CharReplacement {
+fn filename_replacement_for_char(ch: char) -> CharReplacement {
     match ch {
-        'A'..='Z' | 'a'..='z' | '0'..='9' | ' ' | '.' | '-' | '_' | '\'' => {
-            CharReplacement::Char(ch)
-        }
         '\u{2018}' | '\u{2019}' => CharReplacement::Char('\''),
         '\u{201C}' | '\u{201D}' => CharReplacement::Char('\''),
         '\u{2013}' | '\u{2014}' => CharReplacement::Char('-'),
         '\u{2026}' => CharReplacement::Str("..."),
-        _ => CharReplacement::Underscore,
+        '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => CharReplacement::Underscore,
+        _ if ch.is_control() => CharReplacement::Underscore,
+        _ => CharReplacement::Char(ch),
     }
 }
 
@@ -689,6 +688,26 @@ exit 0
         assert!(!raw_path.exists());
     }
 
+    #[test]
+    fn splitter_preserves_unicode_track_filename() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_fixture_album(tmp.path(), true);
+        let track_name = "Тестовий Виконавець - Тестова Збірка - 01 - Вигадана Пісня.flac";
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            &format!(
+                ": > \"{track_name}\"\nprintf 'Splitting [album.flac] (0:01.00) --> [{track_name}] (0:01.00) :\\n' >&2\nexit 0\n"
+            ),
+        );
+        let splitter = test_splitter(fake);
+
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
+
+        assert_eq!(result.status, SplitStatus::Split);
+        assert_eq!(result.tracks, vec![tmp.path().join(track_name)]);
+        assert!(result.tracks[0].exists());
+    }
+
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn splitter_reconciles_directory_tracks_when_detection_misses_non_utf8_names() {
@@ -749,12 +768,12 @@ exit 0
     }
 
     #[test]
-    fn sanitizes_unicode_punctuation_and_remaining_non_ascii() {
+    fn normalizes_unicode_punctuation_and_preserves_unicode_letters() {
         let sanitized = sanitize_file_name_str(
-            "Artist - Album - 02 - \u{201C}Cafe\u{201D}\u{2014}deja vu\u{2026}.flac",
+            "Artist - Album - 02 - \u{201C}Café\u{201D}\u{2014}déjà vu\u{2026}.flac",
         );
 
-        assert_eq!(sanitized, "Artist - Album - 02 - 'Cafe'-deja vu....flac");
+        assert_eq!(sanitized, "Artist - Album - 02 - 'Café'-déjà vu....flac");
     }
 
     #[cfg(unix)]
@@ -772,7 +791,7 @@ exit 0
 
     #[test]
     fn sanitizer_collapses_underscores_and_trims_edges() {
-        let sanitized = sanitize_file_name_str("  \u{00E9}\u{00E5} Track \u{266B}.flac  ");
+        let sanitized = sanitize_file_name_str("  :* Track ?.flac  ");
 
         assert_eq!(sanitized, "Track _.flac");
     }
@@ -780,9 +799,9 @@ exit 0
     #[test]
     fn generated_track_rename_preflight_rejects_duplicate_sanitized_targets() {
         let tmp = tempdir().unwrap();
-        let first = tmp.path().join("Artist - Album - 01 - caf\u{00E9}.flac");
-        let second = tmp.path().join("Artist - Album - 01 - caf\u{00E5}.flac");
-        let target = tmp.path().join("Artist - Album - 01 - caf_.flac");
+        let first = tmp.path().join("Artist - Album - 01 - caf\u{2018}.flac");
+        let second = tmp.path().join("Artist - Album - 01 - caf\u{2019}.flac");
+        let target = tmp.path().join("Artist - Album - 01 - caf'.flac");
         fs::write(&first, "first").unwrap();
         fs::write(&second, "second").unwrap();
 
