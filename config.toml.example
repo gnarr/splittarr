@@ -29,6 +29,7 @@ manual_import_enabled = true
 
 [cue]
 strict = false
+legacy_encodings = ["windows-1251", "windows-1250"]
 
 [shnsplit]
 path = "shnsplit"
