@@ -1,6 +1,7 @@
 mod adapters;
 mod application;
 mod bootstrap;
+mod cue_file;
 mod domain;
 
 use std::sync::Arc;

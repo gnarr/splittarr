@@ -2,9 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-use rcue::parser::parse_from_file;
 
 use crate::application::ports::{CueInputInspector, CueInputSnapshot, CueReferencedAudioInput};
+use crate::cue_file::read_cue;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FilesystemCueInputInspector;
@@ -52,7 +52,7 @@ impl CueInputInspector for FilesystemCueInputInspector {
 
 fn snapshot_inputs_sync(cue_path: &Path) -> Result<CueInputSnapshot> {
     let cue_size_bytes = file_size(cue_path);
-    let cue = match parse_from_file(&cue_path.to_string_lossy(), false) {
+    let cue = match read_cue(cue_path, false) {
         Ok(cue) => cue,
         Err(err) => {
             eprintln!(
@@ -80,7 +80,7 @@ fn snapshot_inputs_sync(cue_path: &Path) -> Result<CueInputSnapshot> {
 }
 
 fn cue_references_audio_file_sync(cue_path: &Path, audio_path: &Path) -> bool {
-    let cue = match parse_from_file(&cue_path.to_string_lossy(), false) {
+    let cue = match read_cue(cue_path, false) {
         Ok(cue) => cue,
         Err(err) => {
             eprintln!(

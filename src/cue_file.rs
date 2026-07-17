@@ -14,7 +14,36 @@ pub(crate) struct PreparedCue {
     _temporary_path: Option<TempPath>,
 }
 
+struct DecodedCue {
+    cue: Cue,
+    legacy_contents: Option<String>,
+}
+
+pub(crate) fn read_cue(cue_path: &Path, strict: bool) -> Result<Cue> {
+    let cue_dir = cue_directory(cue_path)?;
+    Ok(decode_cue(cue_path, cue_dir, strict)?.cue)
+}
+
 pub(crate) fn prepare_cue(cue_path: &Path, cue_dir: &Path, strict: bool) -> Result<PreparedCue> {
+    let decoded = decode_cue(cue_path, cue_dir, strict)?;
+    let Some(legacy_contents) = decoded.legacy_contents else {
+        return Ok(PreparedCue {
+            cue: decoded.cue,
+            command_path: cue_path.to_path_buf(),
+            _temporary_path: None,
+        });
+    };
+
+    let temporary_path = write_temporary_utf8_cue(cue_dir, legacy_contents.as_bytes(), cue_path)?;
+    let command_path = temporary_path.to_path_buf();
+    Ok(PreparedCue {
+        cue: decoded.cue,
+        command_path,
+        _temporary_path: Some(temporary_path),
+    })
+}
+
+fn decode_cue(cue_path: &Path, cue_dir: &Path, strict: bool) -> Result<DecodedCue> {
     let bytes = fs::read(cue_path)
         .map_err(|err| anyhow!("failed to read cue file {}: {err}", cue_path.display()))?;
 
@@ -22,23 +51,22 @@ pub(crate) fn prepare_cue(cue_path: &Path, cue_dir: &Path, strict: bool) -> Resu
         Ok(decoded) => {
             let cue = parse_decoded_cue(decoded, strict)
                 .map_err(|err| anyhow!("failed to parse cue file {}: {err}", cue_path.display()))?;
-            Ok(PreparedCue {
+            Ok(DecodedCue {
                 cue,
-                command_path: cue_path.to_path_buf(),
-                _temporary_path: None,
+                legacy_contents: None,
             })
         }
-        Err(utf8_error) => prepare_legacy_cue(cue_path, cue_dir, strict, &bytes, utf8_error),
+        Err(utf8_error) => decode_legacy_cue(cue_path, cue_dir, strict, &bytes, utf8_error),
     }
 }
 
-fn prepare_legacy_cue(
+fn decode_legacy_cue(
     cue_path: &Path,
     cue_dir: &Path,
     strict: bool,
     bytes: &[u8],
     utf8_error: std::str::Utf8Error,
-) -> Result<PreparedCue> {
+) -> Result<DecodedCue> {
     let mut failures = Vec::new();
 
     for encoding in [WINDOWS_1251, WINDOWS_1250] {
@@ -71,12 +99,9 @@ fn prepare_legacy_cue(
             continue;
         }
 
-        let temporary_path = write_temporary_utf8_cue(cue_dir, decoded.as_bytes(), cue_path)?;
-        let command_path = temporary_path.to_path_buf();
-        return Ok(PreparedCue {
+        return Ok(DecodedCue {
             cue,
-            command_path,
-            _temporary_path: Some(temporary_path),
+            legacy_contents: Some(decoded.into_owned()),
         });
     }
 
@@ -85,6 +110,12 @@ fn prepare_legacy_cue(
         cue_path.display(),
         failures.join("; ")
     ))
+}
+
+fn cue_directory(cue_path: &Path) -> Result<&Path> {
+    cue_path
+        .parent()
+        .ok_or_else(|| anyhow!("cue file has no parent directory: {}", cue_path.display()))
 }
 
 fn parse_decoded_cue(

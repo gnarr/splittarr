@@ -1,4 +1,3 @@
-pub(crate) mod cue_file;
 pub mod filesystem_cleanup;
 pub mod filesystem_cue_input_inspector;
 pub mod filesystem_cue_scanner;

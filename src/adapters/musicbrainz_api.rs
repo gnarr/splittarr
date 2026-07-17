@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use base64::Engine;
-use rcue::parser::parse_from_file;
 use reqwest::Client;
 use serde::Deserialize;
 use sha1::{Digest, Sha1};
@@ -19,6 +18,7 @@ use crate::application::ports::{
     MusicBrainzDiscReleaseLookup,
 };
 use crate::bootstrap::settings::MusicBrainzSettings;
+use crate::cue_file::read_cue;
 
 const CD_FRAMES_PER_SECOND: u64 = 75;
 const CD_LEAD_IN_FRAMES: u64 = 150;
@@ -232,7 +232,7 @@ fn build_musicbrainz_toc(cue_paths: &[PathBuf]) -> Result<MusicBrainzToc> {
             "MusicBrainz TOC CUE path: {}\n",
             cue_path.display()
         ));
-        let cue = parse_from_file(&cue_path.to_string_lossy(), false)
+        let cue = read_cue(cue_path, false)
             .map_err(|err| anyhow!("failed to parse CUE {}: {err}", cue_path.display()))?;
         let cue_dir = cue_path.parent().unwrap_or_else(|| Path::new("."));
 
