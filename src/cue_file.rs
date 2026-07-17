@@ -141,6 +141,11 @@ fn decode_legacy_cue(
     }
 
     let candidate = candidates.remove(0);
+    eprintln!(
+        "Decoded legacy CUE {} using {}",
+        cue_path.display(),
+        candidate.label
+    );
     Ok(DecodedCue {
         cue: candidate.cue,
         legacy_contents: Some(candidate.contents),
