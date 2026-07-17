@@ -21,14 +21,18 @@ use crate::adapters::sqlite_download_store::SqliteDownloadStore;
 use crate::adapters::web;
 use crate::application::service::{MonitorService, ProcessingAdapters};
 use crate::bootstrap::settings::{Cli, Settings};
+use crate::cue_file::CueReader;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let settings = Settings::load(cli.config).context("load settings")?;
+    let cue_reader =
+        CueReader::new(&settings.cue.legacy_encodings).context("configure CUE legacy encodings")?;
     let disc_release_lookup = Arc::new(GnudbDiscReleaseLookup::new(&settings.gnudb));
     let musicbrainz_lookup = Arc::new(FilesystemMusicBrainzDiscReleaseLookup::new(
         &settings.musicbrainz,
+        cue_reader.clone(),
     ));
     let queue_source = LidarrQueueSource::new(&settings.lidarr)
         .with_musicbrainz_disc_release_lookup(musicbrainz_lookup)
@@ -57,14 +61,16 @@ async fn main() -> Result<()> {
         gnudb_enabled: settings.gnudb.disc_lookup_enabled,
         gnudb_server: settings.gnudb.server.clone(),
         cue_strict: settings.cue.strict,
+        cue_legacy_encodings: settings.cue.legacy_encodings.clone(),
         shnsplit_path: settings.shnsplit.path.to_string_lossy().into_owned(),
         shnsplit_overwrite: settings.shnsplit.overwrite,
         shnsplit_format: settings.shnsplit.format.clone(),
     };
     let cue_scanner = FilesystemCueScanner::new();
-    let cue_input_inspector = FilesystemCueInputInspector::new();
+    let cue_input_inspector = FilesystemCueInputInspector::new(cue_reader.clone());
     let download_log = FilesystemDownloadLog::new(settings.logging.download_log_enabled);
     let cue_splitter = ShnsplitCueSplitter::new(
+        cue_reader.clone(),
         settings.cue.strict,
         settings.shnsplit.path.clone(),
         settings.shnsplit.overwrite,

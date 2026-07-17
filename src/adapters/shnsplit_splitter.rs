@@ -8,11 +8,12 @@ use anyhow::{anyhow, Result};
 use regex::bytes::Regex;
 
 use crate::application::ports::CueSplitter;
-use crate::cue_file::prepare_cue;
+use crate::cue_file::CueReader;
 use crate::domain::{SplitOutcome, SplitStatus};
 
 #[derive(Debug, Clone)]
 pub struct ShnsplitCueSplitter {
+    cue_reader: CueReader,
     cue_strict: bool,
     shnsplit_path: PathBuf,
     overwrite: bool,
@@ -20,8 +21,15 @@ pub struct ShnsplitCueSplitter {
 }
 
 impl ShnsplitCueSplitter {
-    pub fn new(cue_strict: bool, shnsplit_path: PathBuf, overwrite: bool, format: String) -> Self {
+    pub fn new(
+        cue_reader: CueReader,
+        cue_strict: bool,
+        shnsplit_path: PathBuf,
+        overwrite: bool,
+        format: String,
+    ) -> Self {
         Self {
+            cue_reader,
             cue_strict,
             shnsplit_path,
             overwrite,
@@ -45,7 +53,9 @@ impl ShnsplitCueSplitter {
         let cue_dir = cue_path
             .parent()
             .ok_or_else(|| anyhow!("cue file has no parent directory: {}", cue_path.display()))?;
-        let prepared_cue = prepare_cue(cue_path, cue_dir, self.cue_strict)?;
+        let prepared_cue = self
+            .cue_reader
+            .prepare(cue_path, cue_dir, self.cue_strict)?;
         let cue_file_name = prepared_cue
             .command_path
             .file_name()
@@ -511,6 +521,7 @@ mod tests {
         parse_generated_tracks, sanitize_file_name_str, snapshot_audio_files_best_effort,
         ShnsplitCueSplitter,
     };
+    use crate::cue_file::CueReader;
     use crate::domain::SplitStatus;
 
     #[test]
@@ -574,6 +585,16 @@ exit 2
     #[test]
     fn splits_windows_1250_cue_via_temporary_utf8_copy() {
         assert_legacy_cue_split(WINDOWS_1250_CUE, "żółć.flac", "TITLE \"Żółć\"");
+    }
+
+    #[test]
+    fn splits_cue_with_configured_encoding_outside_defaults() {
+        assert_legacy_cue_split_with_reader(
+            CueReader::new(["windows-1252"]).unwrap(),
+            WINDOWS_1252_CUE,
+            "canção.flac",
+            "TITLE \"Canção\"",
+        );
     }
 
     #[test]
@@ -903,10 +924,30 @@ exit 0
     }
 
     fn test_splitter(shnsplit_path: PathBuf) -> ShnsplitCueSplitter {
-        ShnsplitCueSplitter::new(true, shnsplit_path, true, "%p - %a - %n - %t".into())
+        ShnsplitCueSplitter::new(
+            CueReader::default(),
+            true,
+            shnsplit_path,
+            true,
+            "%p - %a - %n - %t".into(),
+        )
     }
 
     fn assert_legacy_cue_split(fixture: &[u8], audio_file_name: &str, decoded_title: &str) {
+        assert_legacy_cue_split_with_reader(
+            CueReader::default(),
+            fixture,
+            audio_file_name,
+            decoded_title,
+        );
+    }
+
+    fn assert_legacy_cue_split_with_reader(
+        cue_reader: CueReader,
+        fixture: &[u8],
+        audio_file_name: &str,
+        decoded_title: &str,
+    ) {
         let tmp = tempdir().unwrap();
         let cue_path = tmp.path().join("legacy.cue");
         fs::write(&cue_path, fixture).unwrap();
@@ -930,7 +971,8 @@ echo "Splitting [input.flac] (0:01.00) --> [Artist - Album - 01 - Track One.flac
 exit 0
 "#,
         );
-        let splitter = test_splitter(fake);
+        let splitter =
+            ShnsplitCueSplitter::new(cue_reader, true, fake, true, "%p - %a - %n - %t".into());
 
         let result = splitter.split_cue_sync(&cue_path).unwrap();
 
@@ -1055,5 +1097,13 @@ FILE \"\xBF\xF3\xB3\xE6.flac\" WAVE\n\
   TRACK 01 AUDIO\n\
     TITLE \"Track One\"\n\
     PERFORMER \"\xA3ukasz\"\n\
+    INDEX 01 00:00:00\n";
+
+    const WINDOWS_1252_CUE: &[u8] = b"PERFORMER \"Artista\"\n\
+TITLE \"Can\xE7\xE3o\"\n\
+FILE \"can\xE7\xE3o.flac\" WAVE\n\
+  TRACK 01 AUDIO\n\
+    TITLE \"Faixa\"\n\
+    PERFORMER \"Artista\"\n\
     INDEX 01 00:00:00\n";
 }

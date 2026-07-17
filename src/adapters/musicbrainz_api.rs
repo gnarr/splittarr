@@ -18,7 +18,7 @@ use crate::application::ports::{
     MusicBrainzDiscReleaseLookup,
 };
 use crate::bootstrap::settings::MusicBrainzSettings;
-use crate::cue_file::read_cue;
+use crate::cue_file::CueReader;
 
 const CD_FRAMES_PER_SECOND: u64 = 75;
 const CD_LEAD_IN_FRAMES: u64 = 150;
@@ -32,15 +32,17 @@ pub struct FilesystemMusicBrainzDiscReleaseLookup {
     base_url: String,
     client: Client,
     rate_limiter: Arc<MusicBrainzRateLimiter>,
+    cue_reader: CueReader,
 }
 
 impl FilesystemMusicBrainzDiscReleaseLookup {
-    pub fn new(settings: &MusicBrainzSettings) -> Self {
+    pub fn new(settings: &MusicBrainzSettings, cue_reader: CueReader) -> Self {
         Self {
             enabled: settings.disc_lookup_enabled,
             base_url: settings.base_url.trim_end_matches('/').to_owned(),
             client: Client::new(),
             rate_limiter: global_rate_limiter(),
+            cue_reader,
         }
     }
 
@@ -170,7 +172,7 @@ impl MusicBrainzDiscReleaseLookup for FilesystemMusicBrainzDiscReleaseLookup {
         }
 
         let mut diagnostic = String::from("MusicBrainz lookup: enabled\n");
-        let toc = match build_musicbrainz_toc(&request.cue_paths) {
+        let toc = match build_musicbrainz_toc(&self.cue_reader, &request.cue_paths) {
             Ok(toc) => toc,
             Err(err) => {
                 diagnostic.push_str(&format!("MusicBrainz lookup: skipped: {err}\n"));
@@ -218,7 +220,7 @@ struct AudioFileLength {
     cd_frames: u64,
 }
 
-fn build_musicbrainz_toc(cue_paths: &[PathBuf]) -> Result<MusicBrainzToc> {
+fn build_musicbrainz_toc(cue_reader: &CueReader, cue_paths: &[PathBuf]) -> Result<MusicBrainzToc> {
     let mut diagnostic = String::new();
     if cue_paths.is_empty() {
         return Err(anyhow!("no CUE paths were provided"));
@@ -232,7 +234,8 @@ fn build_musicbrainz_toc(cue_paths: &[PathBuf]) -> Result<MusicBrainzToc> {
             "MusicBrainz TOC CUE path: {}\n",
             cue_path.display()
         ));
-        let cue = read_cue(cue_path, false)
+        let cue = cue_reader
+            .read(cue_path, false)
             .map_err(|err| anyhow!("failed to parse CUE {}: {err}", cue_path.display()))?;
         let cue_dir = cue_path.parent().unwrap_or_else(|| Path::new("."));
 
@@ -601,6 +604,10 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn cue_reader() -> CueReader {
+        CueReader::default()
+    }
+
     #[test]
     fn builds_single_file_toc_and_disc_id() {
         let tmp = tempfile::tempdir().unwrap();
@@ -618,7 +625,7 @@ mod tests {
         )
         .unwrap();
 
-        let toc = build_musicbrainz_toc(&[cue]).unwrap();
+        let toc = build_musicbrainz_toc(&cue_reader(), &[cue]).unwrap();
 
         assert_eq!(toc.toc, "1 2 450 150 300");
         assert_eq!(toc.disc_id, musicbrainz_disc_id(1, 2, 450, &[150, 300]));
@@ -646,7 +653,7 @@ FILE "two.wav" WAVE
         )
         .unwrap();
 
-        let toc = build_musicbrainz_toc(&[cue]).unwrap();
+        let toc = build_musicbrainz_toc(&cue_reader(), &[cue]).unwrap();
 
         assert_eq!(toc.toc, "1 3 525 150 300 375");
     }
@@ -753,7 +760,9 @@ FILE "two.wav" WAVE
         )
         .unwrap();
 
-        let err = build_musicbrainz_toc(&[cue]).unwrap_err().to_string();
+        let err = build_musicbrainz_toc(&cue_reader(), &[cue])
+            .unwrap_err()
+            .to_string();
 
         assert!(err.contains("unsupported sample rate 48000"));
     }
@@ -774,7 +783,9 @@ FILE "two.wav" WAVE
         )
         .unwrap();
 
-        let err = build_musicbrainz_toc(&[cue]).unwrap_err().to_string();
+        let err = build_musicbrainz_toc(&cue_reader(), &[cue])
+            .unwrap_err()
+            .to_string();
 
         assert!(err.contains("no audio tracks"));
     }
@@ -794,12 +805,15 @@ FILE "two.wav" WAVE
         .unwrap();
         let body = r#"{"releases":[{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","title":"Album","date":"1984-01-01","country":"DE","status":"Official","barcode":"1234567890123","quality":"normal","media":[{"format":"CD","track-count":10},{"format":"Digital Media","track-count":10}],"label-info":[{"label":{"name":"Label"}}],"release-group":{"id":"11111111-1111-1111-1111-111111111111","title":"Album","first-release-date":"1984"}}]}"#;
         let (base_url, request) = serve_once(body).await;
-        let lookup = FilesystemMusicBrainzDiscReleaseLookup::new(&MusicBrainzSettings {
-            disc_lookup_enabled: true,
-            base_url,
-            trust_disc_lookup: false,
-            add_missing_release_group_enabled: false,
-        })
+        let lookup = FilesystemMusicBrainzDiscReleaseLookup::new(
+            &MusicBrainzSettings {
+                disc_lookup_enabled: true,
+                base_url,
+                trust_disc_lookup: false,
+                add_missing_release_group_enabled: false,
+            },
+            cue_reader(),
+        )
         .with_rate_limiter(Arc::new(MusicBrainzRateLimiter::default()));
 
         let result = lookup
@@ -863,12 +877,15 @@ FILE "two.wav" WAVE
         )
         .unwrap();
         let (base_url, _) = serve_once(r#"{"releases":[]}"#).await;
-        let lookup = FilesystemMusicBrainzDiscReleaseLookup::new(&MusicBrainzSettings {
-            disc_lookup_enabled: true,
-            base_url,
-            trust_disc_lookup: false,
-            add_missing_release_group_enabled: false,
-        })
+        let lookup = FilesystemMusicBrainzDiscReleaseLookup::new(
+            &MusicBrainzSettings {
+                disc_lookup_enabled: true,
+                base_url,
+                trust_disc_lookup: false,
+                add_missing_release_group_enabled: false,
+            },
+            cue_reader(),
+        )
         .with_rate_limiter(Arc::new(MusicBrainzRateLimiter::default()));
 
         let result = lookup

@@ -28,6 +28,7 @@ pub struct StatusConfig {
     pub gnudb_enabled: bool,
     pub gnudb_server: String,
     pub cue_strict: bool,
+    pub cue_legacy_encodings: Vec<String>,
     pub shnsplit_path: String,
     pub shnsplit_overwrite: bool,
     pub shnsplit_format: String,
@@ -303,6 +304,10 @@ fn status_content(config: &StatusConfig, stats: &DownloadStats) -> Markup {
                 div {
                     strong { "Strict CUE mode" }
                     (feature_badge(config.cue_strict))
+                }
+                div class="wide" {
+                    strong { "Legacy CUE encodings" }
+                    code { (config.cue_legacy_encodings.join(", ")) }
                 }
                 div {
                     strong { "Output format" }
@@ -791,6 +796,7 @@ mod tests {
             gnudb_enabled: false,
             gnudb_server: "gnudb.gnudb.org".into(),
             cue_strict: false,
+            cue_legacy_encodings: vec!["windows-1251".into(), "windows-1250".into()],
             shnsplit_path: "shnsplit".into(),
             shnsplit_overwrite: true,
             shnsplit_format: "%p - %a - %n - %t".into(),
@@ -932,6 +938,7 @@ mod tests {
         assert!(rendered.contains("0.0.0-test"));
         assert!(rendered.contains("http://lidarr:8686"));
         assert!(rendered.contains("gnudb.gnudb.org"));
+        assert!(rendered.contains("windows-1251, windows-1250"));
         assert!(rendered.contains("%p - %a - %n - %t"));
         assert!(rendered.contains("Download History"));
     }

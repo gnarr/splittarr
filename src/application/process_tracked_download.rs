@@ -3,10 +3,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 
 use crate::application::ports::{
-    CueInputInspector, CueInputSnapshot, CueMetadataHint, CueScanner, CueSplitter, DownloadLog,
-    DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
+    CueInputInspector, CueInputSnapshot, CueScanner, CueSplitter, DownloadLog, DownloadStore,
+    ManualImportRequest, ManualImportResult, ManualImportTrigger,
 };
-use crate::cue_file::read_cue;
 use crate::domain::{
     CueSheet, CueSheetStatus, FailedImportCandidate, InputFileKind, RecordedTrack, SplitOutcome,
     SplitStatus, TrackedDownload,
@@ -107,7 +106,7 @@ where
     let mut cue_hints = Vec::new();
 
     for cue_path in scan.cue_files {
-        cue_hints.push(cue_metadata_hint(&cue_path));
+        cue_hints.push(inspector.cue_metadata_hint(&cue_path).await?);
         append_log_line(&mut log, "");
         append_log_line(&mut log, format!("Cue: {}", cue_path.display()));
         let cue_sheet = store
@@ -323,52 +322,6 @@ async fn write_log_best_effort<L: DownloadLog>(
     }
 }
 
-fn cue_metadata_hint(cue_path: &Path) -> CueMetadataHint {
-    let cue = read_cue(cue_path, false).ok();
-    let Some(cue) = cue else {
-        return CueMetadataHint {
-            path: cue_path.to_path_buf(),
-            album_title: None,
-            performer: None,
-            catalog: None,
-            disc_id: None,
-            comments: Vec::new(),
-            track_count: 0,
-            tracks: Vec::new(),
-        };
-    };
-
-    let tracks = cue
-        .files
-        .iter()
-        .flat_map(|file| file.tracks.iter())
-        .map(|track| crate::application::ports::CueTrackHint {
-            number: track.no.clone(),
-            title: track.title.clone(),
-            performer: track.performer.clone(),
-        })
-        .collect::<Vec<_>>();
-
-    CueMetadataHint {
-        path: cue_path.to_path_buf(),
-        album_title: cue.title,
-        performer: cue.performer,
-        catalog: cue.catalog,
-        disc_id: cue_comment_value(&cue.comments, "DISCID").map(str::to_owned),
-        comments: cue.comments,
-        track_count: cue.files.iter().map(|file| file.tracks.len()).sum(),
-        tracks,
-    }
-}
-
-fn cue_comment_value<'a>(comments: &'a [(String, String)], key: &str) -> Option<&'a str> {
-    comments
-        .iter()
-        .find(|(comment_key, _)| comment_key.eq_ignore_ascii_case(key))
-        .map(|(_, value)| value.trim())
-        .filter(|value| !value.is_empty())
-}
-
 async fn store_split_result<S: DownloadStore, I: CueInputInspector>(
     store: &S,
     inspector: &I,
@@ -455,6 +408,7 @@ mod tests {
         CueInputInspector, CueInputSnapshot, CueReferencedAudioInput, CueScanner, CueSplitter,
         DownloadLog, DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
     };
+    use crate::cue_file::CueReader;
     use crate::domain::{
         CueSheet, CueSheetStatus, DiscoveredCueSheets, GeneratedTrack, InputFileKind,
         RecordedTrack, SplitOutcome, SplitStatus, TrackCleanupStatus, TrackedDownload,
@@ -643,6 +597,15 @@ mod tests {
             })
         }
 
+        async fn cue_metadata_hint(
+            &self,
+            cue_path: &Path,
+        ) -> Result<crate::application::ports::CueMetadataHint> {
+            FilesystemCueInputInspector::new(CueReader::default())
+                .cue_metadata_hint(cue_path)
+                .await
+        }
+
         async fn cue_references_audio_file(
             &self,
             cue_path: &Path,
@@ -786,7 +749,7 @@ mod tests {
 
         let store = FakeStore::default();
         let scanner = FilesystemCueScanner::new();
-        let inspector = FilesystemCueInputInspector::new();
+        let inspector = FilesystemCueInputInspector::new(CueReader::default());
         let splitter = FakeSplitter {
             calls: Mutex::new(Vec::new()),
         };

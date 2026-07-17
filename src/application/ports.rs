@@ -128,6 +128,9 @@ pub struct CueReferencedAudioInput {
 pub trait CueInputInspector {
     async fn file_size(&self, path: &Path) -> Result<Option<i64>>;
     async fn snapshot_inputs(&self, cue_path: &Path) -> Result<CueInputSnapshot>;
+    async fn cue_metadata_hint(&self, cue_path: &Path) -> Result<CueMetadataHint> {
+        Ok(CueMetadataHint::empty(cue_path))
+    }
     async fn cue_references_audio_file(&self, cue_path: &Path, audio_path: &Path) -> Result<bool>;
     async fn filter_cue_files_for_audio(
         &self,
@@ -168,6 +171,21 @@ pub struct CueMetadataHint {
     pub comments: Vec<(String, String)>,
     pub track_count: usize,
     pub tracks: Vec<CueTrackHint>,
+}
+
+impl CueMetadataHint {
+    pub fn empty(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            album_title: None,
+            performer: None,
+            catalog: None,
+            disc_id: None,
+            comments: Vec::new(),
+            track_count: 0,
+            tracks: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
