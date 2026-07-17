@@ -8,6 +8,8 @@ use rcue::cue::Cue;
 use rcue::parser::parse;
 use tempfile::{Builder, TempPath};
 
+pub(crate) const TEMPORARY_CUE_PREFIX: &str = ".splittarr-cue-";
+
 pub(crate) struct PreparedCue {
     pub cue: Cue,
     pub command_path: PathBuf,
@@ -174,7 +176,7 @@ fn write_temporary_utf8_cue(
     original_cue_path: &Path,
 ) -> Result<TempPath> {
     let mut temporary = Builder::new()
-        .prefix(".splittarr-cue-")
+        .prefix(TEMPORARY_CUE_PREFIX)
         .suffix(".cue")
         .tempfile_in(cue_dir)
         .map_err(|err| {
