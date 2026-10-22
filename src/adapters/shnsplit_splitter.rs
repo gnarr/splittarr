@@ -53,13 +53,7 @@ impl ShnsplitCueSplitter {
         let cue_dir = cue_path
             .parent()
             .ok_or_else(|| anyhow!("cue file has no parent directory: {}", cue_path.display()))?;
-        let prepared_cue = self
-            .cue_reader
-            .prepare(cue_path, cue_dir, self.cue_strict)?;
-        let cue_file_name = prepared_cue
-            .command_path
-            .file_name()
-            .ok_or_else(|| anyhow!("cue file has no file name: {}", cue_path.display()))?;
+        let prepared_cue = self.cue_reader.prepare(cue_path, self.cue_strict)?;
 
         let expected_tracks = prepared_cue
             .cue
@@ -95,7 +89,7 @@ impl ShnsplitCueSplitter {
             command
                 .current_dir(cue_dir)
                 .arg("-f")
-                .arg(cue_file_name)
+                .arg(&prepared_cue.command_path)
                 .arg("-d")
                 .arg(cue_dir)
                 .arg("-t")
@@ -625,10 +619,9 @@ exit 2
         let err = splitter.split_cue_sync(&cue_path).unwrap_err();
 
         assert!(err.to_string().contains("shnsplit failed"));
-        let temporary_name = fs::read_to_string(tmp.path().join("cue-argument.log")).unwrap();
-        assert!(!tmp.path().join(temporary_name).exists());
+        let temporary_cue = fs::read_to_string(tmp.path().join("cue-argument.log")).unwrap();
+        assert!(!Path::new(&temporary_cue).exists());
         assert_eq!(fs::read(&cue_path).unwrap(), WINDOWS_1251_CUE);
-        assert_no_temporary_cues(tmp.path());
     }
 
     #[test]
@@ -648,7 +641,6 @@ exit 2
         assert!(message.contains("windows-1250: referenced files do not exist"));
         assert!(!tmp.path().join("shnsplit-was-invoked").exists());
         assert_eq!(fs::read(&cue_path).unwrap(), WINDOWS_1251_CUE);
-        assert_no_temporary_cues(tmp.path());
     }
 
     #[test]
@@ -928,7 +920,6 @@ exit 0
         assert!(args.contains(&"flac flac -cd -s %f"));
         let cue_arg_index = args.iter().position(|arg| *arg == "-f").unwrap() + 1;
         assert_eq!(args[cue_arg_index], "album.cue");
-        assert_no_temporary_cues(tmp.path());
     }
 
     #[test]
@@ -1001,28 +992,14 @@ exit 0
             vec![tmp.path().join("Artist - Album - 01 - Track One.flac")]
         );
         assert_eq!(fs::read(&cue_path).unwrap(), fixture);
-        let temporary_name = fs::read_to_string(tmp.path().join("cue-argument.log")).unwrap();
-        assert_ne!(temporary_name, "legacy.cue");
-        assert!(temporary_name.starts_with(".splittarr-cue-"));
-        assert!(!tmp.path().join(&temporary_name).exists());
+        let temporary_cue =
+            PathBuf::from(fs::read_to_string(tmp.path().join("cue-argument.log")).unwrap());
+        assert!(temporary_cue.is_absolute());
+        assert!(!temporary_cue.starts_with(tmp.path()));
+        assert!(!temporary_cue.exists());
         let temporary_contents = fs::read_to_string(tmp.path().join("cue-content.log")).unwrap();
         assert!(temporary_contents.contains(decoded_title));
         assert!(temporary_contents.contains(&format!("FILE \"{audio_file_name}\" WAVE")));
-        assert_no_temporary_cues(tmp.path());
-    }
-
-    fn assert_no_temporary_cues(dir: &Path) {
-        let temporary_cues = fs::read_dir(dir)
-            .unwrap()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".splittarr-cue-")
-            })
-            .collect::<Vec<_>>();
-        assert!(temporary_cues.is_empty());
     }
 
     fn write_fixture_album(dir: &Path, with_audio: bool) -> PathBuf {

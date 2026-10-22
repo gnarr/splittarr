@@ -10,7 +10,6 @@ use rcue::cue::Cue;
 use rcue::parser::parse;
 use tempfile::{Builder, TempPath};
 
-pub(crate) const TEMPORARY_CUE_PREFIX: &str = ".splittarr-cue-";
 pub(crate) const DEFAULT_LEGACY_ENCODING_LABELS: &[&str] = &["windows-1251", "windows-1250"];
 
 #[derive(Clone)]
@@ -49,31 +48,39 @@ impl CueReader {
     }
 
     pub fn read(&self, cue_path: &Path, strict: bool) -> Result<Cue> {
-        let cue_dir = cue_directory(cue_path)?;
-        Ok(self.decode(cue_path, cue_dir, strict)?.cue)
+        Ok(self.decode(cue_path, strict)?.cue)
     }
 
-    pub fn prepare(&self, cue_path: &Path, cue_dir: &Path, strict: bool) -> Result<PreparedCue> {
-        let decoded = self.decode(cue_path, cue_dir, strict)?;
-        let Some(legacy_contents) = decoded.legacy_contents else {
+    /// `command_path` is relative to the cue directory for UTF-8 sheets. Legacy
+    /// sheets get an absolute path to a UTF-8 copy in the system temp directory,
+    /// removed when the `PreparedCue` is dropped.
+    pub fn prepare(&self, cue_path: &Path, strict: bool) -> Result<PreparedCue> {
+        let decoded = self.decode(cue_path, strict)?;
+        let Some(legacy) = decoded.legacy else {
+            let file_name = cue_path
+                .file_name()
+                .ok_or_else(|| anyhow!("cue file has no file name: {}", cue_path.display()))?;
             return Ok(PreparedCue {
                 cue: decoded.cue,
-                command_path: cue_path.to_path_buf(),
+                command_path: PathBuf::from(file_name),
                 _temporary_path: None,
             });
         };
 
-        let temporary_path =
-            write_temporary_utf8_cue(cue_dir, legacy_contents.as_bytes(), cue_path)?;
-        let command_path = temporary_path.to_path_buf();
+        eprintln!(
+            "Decoded legacy CUE {} using {}",
+            cue_path.display(),
+            legacy.encoding.name()
+        );
+        let temporary_path = write_temporary_utf8_cue(legacy.contents.as_bytes(), cue_path)?;
         Ok(PreparedCue {
             cue: decoded.cue,
-            command_path,
+            command_path: temporary_path.to_path_buf(),
             _temporary_path: Some(temporary_path),
         })
     }
 
-    fn decode(&self, cue_path: &Path, cue_dir: &Path, strict: bool) -> Result<DecodedCue> {
+    fn decode(&self, cue_path: &Path, strict: bool) -> Result<DecodedCue> {
         let bytes = fs::read(cue_path)
             .map_err(|err| anyhow!("failed to read cue file {}: {err}", cue_path.display()))?;
 
@@ -82,23 +89,22 @@ impl CueReader {
                 let cue = parse_decoded_cue(decoded, strict).map_err(|err| {
                     anyhow!("failed to parse cue file {}: {err}", cue_path.display())
                 })?;
-                Ok(DecodedCue {
-                    cue,
-                    legacy_contents: None,
-                })
+                Ok(DecodedCue { cue, legacy: None })
             }
-            Err(utf8_error) => self.decode_legacy(cue_path, cue_dir, strict, &bytes, utf8_error),
+            Err(utf8_error) => self.decode_legacy(cue_path, strict, &bytes, utf8_error),
         }
     }
 
     fn decode_legacy(
         &self,
         cue_path: &Path,
-        cue_dir: &Path,
         strict: bool,
         bytes: &[u8],
         utf8_error: std::str::Utf8Error,
     ) -> Result<DecodedCue> {
+        let cue_dir = cue_path
+            .parent()
+            .ok_or_else(|| anyhow!("cue file has no parent directory: {}", cue_path.display()))?;
         let mut failures = Vec::new();
 
         // ASCII FILE names resolve under every single-byte encoding, so the
@@ -133,10 +139,12 @@ impl CueReader {
                 continue;
             }
 
-            eprintln!("Decoded legacy CUE {} using {label}", cue_path.display());
             return Ok(DecodedCue {
                 cue,
-                legacy_contents: Some(decoded.into_owned()),
+                legacy: Some(LegacyDecoding {
+                    encoding,
+                    contents: decoded.into_owned(),
+                }),
             });
         }
 
@@ -181,13 +189,12 @@ pub(crate) struct PreparedCue {
 
 struct DecodedCue {
     cue: Cue,
-    legacy_contents: Option<String>,
+    legacy: Option<LegacyDecoding>,
 }
 
-fn cue_directory(cue_path: &Path) -> Result<&Path> {
-    cue_path
-        .parent()
-        .ok_or_else(|| anyhow!("cue file has no parent directory: {}", cue_path.display()))
+struct LegacyDecoding {
+    encoding: &'static Encoding,
+    contents: String,
 }
 
 fn parse_decoded_cue(
@@ -207,15 +214,11 @@ fn missing_referenced_files(cue: &Cue, cue_dir: &Path) -> Vec<String> {
         .collect()
 }
 
-fn write_temporary_utf8_cue(
-    cue_dir: &Path,
-    decoded: &[u8],
-    original_cue_path: &Path,
-) -> Result<TempPath> {
+fn write_temporary_utf8_cue(decoded: &[u8], original_cue_path: &Path) -> Result<TempPath> {
     let mut temporary = Builder::new()
-        .prefix(TEMPORARY_CUE_PREFIX)
+        .prefix("splittarr-")
         .suffix(".cue")
-        .tempfile_in(cue_dir)
+        .tempfile()
         .map_err(|err| {
             anyhow!(
                 "failed to create temporary UTF-8 cue for {}: {err}",
