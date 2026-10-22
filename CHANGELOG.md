@@ -1,6 +1,18 @@
 # Changelog
 
 - - -
+## [v0.6.0](https://github.com/gnarr/splittarr/compare/ae035c18824486c8bd32cb0e7247ace319727eec..v0.6.0) - 2026-10-22
+#### Features
+- (**cue**) support legacy-encoded external CUE sheets - ([ae035c1](https://github.com/gnarr/splittarr/commit/ae035c18824486c8bd32cb0e7247ace319727eec)) - Ivan Malaniak
+#### Bug Fixes
+- (**cue**) keep temporary UTF-8 sheets out of download folders - ([197279b](https://github.com/gnarr/splittarr/commit/197279b130d92ad11255001dbdc4347d6145e1d4)) - Gunnar Cortes
+- (**cue**) use first legacy encoding that resolves all files - ([57235ed](https://github.com/gnarr/splittarr/commit/57235ed2e8e878225111eee495f95b698482ffad)) - Gunnar Cortes
+- (**settings**) ignore blank legacy encoding labels - ([2bf444d](https://github.com/gnarr/splittarr/commit/2bf444d07634c07530211ede57a4616c90f28299)) - Gunnar Cortes
+#### Refactoring
+- (**cue**) drop test-only code from the legacy reader - ([4d9e28d](https://github.com/gnarr/splittarr/commit/4d9e28daaa0044f69e621b8fad80824dc599dff5)) - Gunnar Cortes
+
+- - -
+
 ## [v0.5.0](https://github.com/gnarr/splittarr/compare/6e584755c150adbb27022be2b1d400e8aa5bb2ee..v0.5.0) - 2026-06-17
 #### Features
 - (**web**) show detailed status configuration - ([2bfaee0](https://github.com/gnarr/splittarr/commit/2bfaee0ceae8fcbcdfaff57b4c5755fc9e2523df)) - Gunnar Cortes
