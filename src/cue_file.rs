@@ -1,4 +1,3 @@
-use std::fmt;
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
@@ -12,7 +11,7 @@ use tempfile::{Builder, TempPath};
 
 pub(crate) const DEFAULT_LEGACY_ENCODING_LABELS: &[&str] = &["windows-1251", "windows-1250"];
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct CueReader {
     legacy_encodings: Arc<[&'static Encoding]>,
 }
@@ -160,24 +159,11 @@ impl CueReader {
     }
 }
 
+#[cfg(test)]
 impl Default for CueReader {
     fn default() -> Self {
         Self::new(DEFAULT_LEGACY_ENCODING_LABELS)
             .expect("default CUE legacy encoding labels must be valid")
-    }
-}
-
-impl fmt::Debug for CueReader {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let names = self
-            .legacy_encodings
-            .iter()
-            .map(|encoding| encoding.name())
-            .collect::<Vec<_>>();
-        formatter
-            .debug_struct("CueReader")
-            .field("legacy_encodings", &names)
-            .finish()
     }
 }
 
@@ -244,6 +230,7 @@ fn write_temporary_utf8_cue(decoded: &[u8], original_cue_path: &Path) -> Result<
 mod tests {
     use std::fs;
 
+    use encoding_rs::WINDOWS_1252;
     use tempfile::tempdir;
 
     use super::CueReader;
@@ -258,10 +245,7 @@ FILE \"can\xE7\xE3o.flac\" WAVE\n\
     fn accepts_encoding_rs_labels_and_deduplicates_aliases() {
         let reader = CueReader::new(["windows-1252", "cp1252"]).unwrap();
 
-        assert_eq!(
-            format!("{reader:?}"),
-            "CueReader { legacy_encodings: [\"windows-1252\"] }"
-        );
+        assert_eq!(reader.legacy_encodings.as_ref(), [WINDOWS_1252]);
     }
 
     #[test]

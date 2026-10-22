@@ -128,9 +128,7 @@ pub struct CueReferencedAudioInput {
 pub trait CueInputInspector {
     async fn file_size(&self, path: &Path) -> Result<Option<i64>>;
     async fn snapshot_inputs(&self, cue_path: &Path) -> Result<CueInputSnapshot>;
-    async fn cue_metadata_hint(&self, cue_path: &Path) -> Result<CueMetadataHint> {
-        Ok(CueMetadataHint::empty(cue_path))
-    }
+    async fn cue_metadata_hint(&self, cue_path: &Path) -> Result<CueMetadataHint>;
     async fn cue_references_audio_file(&self, cue_path: &Path, audio_path: &Path) -> Result<bool>;
     async fn filter_cue_files_for_audio(
         &self,

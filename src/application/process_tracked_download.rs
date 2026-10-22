@@ -405,8 +405,9 @@ mod tests {
     use crate::adapters::filesystem_cue_input_inspector::FilesystemCueInputInspector;
     use crate::adapters::filesystem_cue_scanner::FilesystemCueScanner;
     use crate::application::ports::{
-        CueInputInspector, CueInputSnapshot, CueReferencedAudioInput, CueScanner, CueSplitter,
-        DownloadLog, DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
+        CueInputInspector, CueInputSnapshot, CueMetadataHint, CueReferencedAudioInput, CueScanner,
+        CueSplitter, DownloadLog, DownloadStore, ManualImportRequest, ManualImportResult,
+        ManualImportTrigger,
     };
     use crate::cue_file::CueReader;
     use crate::domain::{
@@ -597,10 +598,7 @@ mod tests {
             })
         }
 
-        async fn cue_metadata_hint(
-            &self,
-            cue_path: &Path,
-        ) -> Result<crate::application::ports::CueMetadataHint> {
+        async fn cue_metadata_hint(&self, cue_path: &Path) -> Result<CueMetadataHint> {
             FilesystemCueInputInspector::new(CueReader::default())
                 .cue_metadata_hint(cue_path)
                 .await

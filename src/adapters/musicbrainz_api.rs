@@ -234,9 +234,7 @@ fn build_musicbrainz_toc(cue_reader: &CueReader, cue_paths: &[PathBuf]) -> Resul
             "MusicBrainz TOC CUE path: {}\n",
             cue_path.display()
         ));
-        let cue = cue_reader
-            .read(cue_path, false)
-            .map_err(|err| anyhow!("failed to parse CUE {}: {err}", cue_path.display()))?;
+        let cue = cue_reader.read(cue_path, false)?;
         let cue_dir = cue_path.parent().unwrap_or_else(|| Path::new("."));
 
         for cue_file in cue.files {

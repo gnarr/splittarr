@@ -172,9 +172,9 @@ mod tests {
     use super::{MonitorService, ProcessingAdapters};
     use crate::adapters::sqlite_download_store::SqliteDownloadStore;
     use crate::application::ports::{
-        CueInputInspector, CueInputSnapshot, CueReferencedAudioInput, CueScanner, CueSplitter,
-        DownloadLog, DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
-        QueueSource, TrackCleanup,
+        CueInputInspector, CueInputSnapshot, CueMetadataHint, CueReferencedAudioInput, CueScanner,
+        CueSplitter, DownloadLog, DownloadStore, ManualImportRequest, ManualImportResult,
+        ManualImportTrigger, QueueSource, TrackCleanup,
     };
     use crate::domain::{
         DiscoveredCueSheets, DownloadLifecycleState, FailedImportCandidate, QueueSnapshot,
@@ -228,6 +228,10 @@ mod tests {
                     size_bytes: Some(5),
                 }],
             })
+        }
+
+        async fn cue_metadata_hint(&self, cue_path: &Path) -> anyhow::Result<CueMetadataHint> {
+            Ok(CueMetadataHint::empty(cue_path))
         }
 
         async fn cue_references_audio_file(
