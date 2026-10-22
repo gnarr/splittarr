@@ -1,11 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-use rcue::parser::parse_from_file;
 
 use crate::application::ports::{
-    CueInputInspector, CueInputSnapshot, CueMetadataHint, CueScanner, CueSplitter, DownloadLog,
-    DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
+    CueInputInspector, CueInputSnapshot, CueScanner, CueSplitter, DownloadLog, DownloadStore,
+    ManualImportRequest, ManualImportResult, ManualImportTrigger,
 };
 use crate::domain::{
     CueSheet, CueSheetStatus, FailedImportCandidate, InputFileKind, RecordedTrack, SplitOutcome,
@@ -107,7 +106,7 @@ where
     let mut cue_hints = Vec::new();
 
     for cue_path in scan.cue_files {
-        cue_hints.push(cue_metadata_hint(&cue_path));
+        cue_hints.push(inspector.cue_metadata_hint(&cue_path).await?);
         append_log_line(&mut log, "");
         append_log_line(&mut log, format!("Cue: {}", cue_path.display()));
         let cue_sheet = store
@@ -323,52 +322,6 @@ async fn write_log_best_effort<L: DownloadLog>(
     }
 }
 
-fn cue_metadata_hint(cue_path: &Path) -> CueMetadataHint {
-    let cue = parse_from_file(&cue_path.to_string_lossy(), false).ok();
-    let Some(cue) = cue else {
-        return CueMetadataHint {
-            path: cue_path.to_path_buf(),
-            album_title: None,
-            performer: None,
-            catalog: None,
-            disc_id: None,
-            comments: Vec::new(),
-            track_count: 0,
-            tracks: Vec::new(),
-        };
-    };
-
-    let tracks = cue
-        .files
-        .iter()
-        .flat_map(|file| file.tracks.iter())
-        .map(|track| crate::application::ports::CueTrackHint {
-            number: track.no.clone(),
-            title: track.title.clone(),
-            performer: track.performer.clone(),
-        })
-        .collect::<Vec<_>>();
-
-    CueMetadataHint {
-        path: cue_path.to_path_buf(),
-        album_title: cue.title,
-        performer: cue.performer,
-        catalog: cue.catalog,
-        disc_id: cue_comment_value(&cue.comments, "DISCID").map(str::to_owned),
-        comments: cue.comments,
-        track_count: cue.files.iter().map(|file| file.tracks.len()).sum(),
-        tracks,
-    }
-}
-
-fn cue_comment_value<'a>(comments: &'a [(String, String)], key: &str) -> Option<&'a str> {
-    comments
-        .iter()
-        .find(|(comment_key, _)| comment_key.eq_ignore_ascii_case(key))
-        .map(|(_, value)| value.trim())
-        .filter(|value| !value.is_empty())
-}
-
 async fn store_split_result<S: DownloadStore, I: CueInputInspector>(
     store: &S,
     inspector: &I,
@@ -449,10 +402,13 @@ mod tests {
     use tempfile::tempdir;
 
     use super::process_tracked_download;
+    use crate::adapters::filesystem_cue_input_inspector::FilesystemCueInputInspector;
+    use crate::adapters::filesystem_cue_scanner::FilesystemCueScanner;
     use crate::application::ports::{
         CueInputInspector, CueInputSnapshot, CueReferencedAudioInput, CueScanner, CueSplitter,
         DownloadLog, DownloadStore, ManualImportRequest, ManualImportResult, ManualImportTrigger,
     };
+    use crate::cue_file::CueReader;
     use crate::domain::{
         CueSheet, CueSheetStatus, DiscoveredCueSheets, GeneratedTrack, InputFileKind,
         RecordedTrack, SplitOutcome, SplitStatus, TrackCleanupStatus, TrackedDownload,
@@ -641,6 +597,15 @@ mod tests {
             })
         }
 
+        async fn cue_metadata_hint(
+            &self,
+            cue_path: &Path,
+        ) -> Result<crate::application::ports::CueMetadataHint> {
+            FilesystemCueInputInspector::new(CueReader::default())
+                .cue_metadata_hint(cue_path)
+                .await
+        }
+
         async fn cue_references_audio_file(
             &self,
             cue_path: &Path,
@@ -772,6 +737,67 @@ mod tests {
             .last()
             .unwrap()
             .contains("fake manual import diagnostic"));
+    }
+
+    #[tokio::test]
+    async fn processes_file_output_path_with_windows_1251_external_cue() {
+        let tmp = tempdir().unwrap();
+        let audio_path = tmp.path().join("пісня.flac");
+        let cue_path = tmp.path().join("external.cue");
+        fs::write(&audio_path, b"audio").unwrap();
+        fs::write(&cue_path, WINDOWS_1251_EXTERNAL_CUE).unwrap();
+
+        let store = FakeStore::default();
+        let scanner = FilesystemCueScanner::new();
+        let inspector = FilesystemCueInputInspector::new(CueReader::default());
+        let splitter = FakeSplitter {
+            calls: Mutex::new(Vec::new()),
+        };
+        let manual_import = FakeManualImport::default();
+        let download_log = FakeDownloadLog::default();
+        let download = TrackedDownload::pending(
+            "download-legacy".into(),
+            "Legacy album".into(),
+            "completed".into(),
+            audio_path.to_string_lossy().to_string(),
+            "importFailed".into(),
+        );
+
+        process_tracked_download(
+            &store,
+            &scanner,
+            &inspector,
+            &splitter,
+            &manual_import,
+            &download_log,
+            download,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            splitter.calls.lock().unwrap().as_slice(),
+            std::slice::from_ref(&cue_path)
+        );
+        assert_eq!(fs::read(&cue_path).unwrap(), WINDOWS_1251_EXTERNAL_CUE);
+        assert!(store
+            .states
+            .lock()
+            .unwrap()
+            .contains(&"awaiting_import".to_string()));
+        assert!(store.recorded_input_files.lock().unwrap().contains(&(
+            audio_path.to_string_lossy().to_string(),
+            InputFileKind::Audio,
+        )));
+
+        let manual_import_calls = manual_import.calls.lock().unwrap();
+        assert_eq!(manual_import_calls.len(), 1);
+        let cue_hint = &manual_import_calls[0].cue_hints[0];
+        assert_eq!(cue_hint.path, cue_path);
+        assert_eq!(cue_hint.album_title.as_deref(), Some("Збірка"));
+        assert_eq!(cue_hint.performer.as_deref(), Some("Виконавець"));
+        assert_eq!(cue_hint.track_count, 1);
+        assert_eq!(cue_hint.tracks[0].title.as_deref(), Some("Привіт"));
     }
 
     #[tokio::test]
@@ -1029,4 +1055,13 @@ mod tests {
             .unwrap()
             .contains("Manual import: failed"));
     }
+
+    const WINDOWS_1251_EXTERNAL_CUE: &[u8] =
+        b"PERFORMER \"\xC2\xE8\xEA\xEE\xED\xE0\xE2\xE5\xF6\xFC\"\n\
+TITLE \"\xC7\xE1\xB3\xF0\xEA\xE0\"\n\
+FILE \"\xEF\xB3\xF1\xED\xFF.flac\" WAVE\n\
+  TRACK 01 AUDIO\n\
+    TITLE \"\xCF\xF0\xE8\xE2\xB3\xF2\"\n\
+    PERFORMER \"\xC2\xE8\xEA\xEE\xED\xE0\xE2\xE5\xF6\xFC\"\n\
+    INDEX 01 00:00:00\n";
 }

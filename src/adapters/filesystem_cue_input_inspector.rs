@@ -2,16 +2,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-use rcue::parser::parse_from_file;
 
-use crate::application::ports::{CueInputInspector, CueInputSnapshot, CueReferencedAudioInput};
+use crate::application::ports::{
+    CueInputInspector, CueInputSnapshot, CueMetadataHint, CueReferencedAudioInput, CueTrackHint,
+};
+use crate::cue_file::CueReader;
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FilesystemCueInputInspector;
+#[derive(Debug, Clone)]
+pub struct FilesystemCueInputInspector {
+    cue_reader: CueReader,
+}
 
 impl FilesystemCueInputInspector {
-    pub fn new() -> Self {
-        Self
+    pub fn new(cue_reader: CueReader) -> Self {
+        Self { cue_reader }
     }
 }
 
@@ -24,18 +28,30 @@ impl CueInputInspector for FilesystemCueInputInspector {
     }
 
     async fn snapshot_inputs(&self, cue_path: &Path) -> Result<CueInputSnapshot> {
+        let cue_reader = self.cue_reader.clone();
         let cue_path = cue_path.to_path_buf();
-        tokio::task::spawn_blocking(move || snapshot_inputs_sync(&cue_path))
+        tokio::task::spawn_blocking(move || snapshot_inputs_sync(&cue_reader, &cue_path))
             .await
             .map_err(|err| anyhow!("blocking task failed to join: {err}"))?
     }
 
-    async fn cue_references_audio_file(&self, cue_path: &Path, audio_path: &Path) -> Result<bool> {
+    async fn cue_metadata_hint(&self, cue_path: &Path) -> Result<CueMetadataHint> {
+        let cue_reader = self.cue_reader.clone();
         let cue_path = cue_path.to_path_buf();
-        let audio_path = audio_path.to_path_buf();
-        tokio::task::spawn_blocking(move || cue_references_audio_file_sync(&cue_path, &audio_path))
+        tokio::task::spawn_blocking(move || cue_metadata_hint_sync(&cue_reader, &cue_path))
             .await
             .map_err(|err| anyhow!("blocking task failed to join: {err}"))
+    }
+
+    async fn cue_references_audio_file(&self, cue_path: &Path, audio_path: &Path) -> Result<bool> {
+        let cue_reader = self.cue_reader.clone();
+        let cue_path = cue_path.to_path_buf();
+        let audio_path = audio_path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            cue_references_audio_file_sync(&cue_reader, &cue_path, &audio_path)
+        })
+        .await
+        .map_err(|err| anyhow!("blocking task failed to join: {err}"))
     }
 
     async fn filter_cue_files_for_audio(
@@ -43,16 +59,19 @@ impl CueInputInspector for FilesystemCueInputInspector {
         cue_files: Vec<PathBuf>,
         audio_path: &Path,
     ) -> Result<Vec<PathBuf>> {
+        let cue_reader = self.cue_reader.clone();
         let audio_path = audio_path.to_path_buf();
-        tokio::task::spawn_blocking(move || filter_cue_files_for_audio_sync(cue_files, &audio_path))
-            .await
-            .map_err(|err| anyhow!("blocking task failed to join: {err}"))
+        tokio::task::spawn_blocking(move || {
+            filter_cue_files_for_audio_sync(&cue_reader, cue_files, &audio_path)
+        })
+        .await
+        .map_err(|err| anyhow!("blocking task failed to join: {err}"))
     }
 }
 
-fn snapshot_inputs_sync(cue_path: &Path) -> Result<CueInputSnapshot> {
+fn snapshot_inputs_sync(cue_reader: &CueReader, cue_path: &Path) -> Result<CueInputSnapshot> {
     let cue_size_bytes = file_size(cue_path);
-    let cue = match parse_from_file(&cue_path.to_string_lossy(), false) {
+    let cue = match cue_reader.read(cue_path, false) {
         Ok(cue) => cue,
         Err(err) => {
             eprintln!(
@@ -79,8 +98,49 @@ fn snapshot_inputs_sync(cue_path: &Path) -> Result<CueInputSnapshot> {
     })
 }
 
-fn cue_references_audio_file_sync(cue_path: &Path, audio_path: &Path) -> bool {
-    let cue = match parse_from_file(&cue_path.to_string_lossy(), false) {
+fn cue_metadata_hint_sync(cue_reader: &CueReader, cue_path: &Path) -> CueMetadataHint {
+    let cue = cue_reader.read(cue_path, false).ok();
+    let Some(cue) = cue else {
+        return CueMetadataHint::empty(cue_path);
+    };
+
+    let tracks = cue
+        .files
+        .iter()
+        .flat_map(|file| file.tracks.iter())
+        .map(|track| CueTrackHint {
+            number: track.no.clone(),
+            title: track.title.clone(),
+            performer: track.performer.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    CueMetadataHint {
+        path: cue_path.to_path_buf(),
+        album_title: cue.title,
+        performer: cue.performer,
+        catalog: cue.catalog,
+        disc_id: cue_comment_value(&cue.comments, "DISCID").map(str::to_owned),
+        comments: cue.comments,
+        track_count: cue.files.iter().map(|file| file.tracks.len()).sum(),
+        tracks,
+    }
+}
+
+fn cue_comment_value<'a>(comments: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    comments
+        .iter()
+        .find(|(comment_key, _)| comment_key.eq_ignore_ascii_case(key))
+        .map(|(_, value)| value.trim())
+        .filter(|value| !value.is_empty())
+}
+
+fn cue_references_audio_file_sync(
+    cue_reader: &CueReader,
+    cue_path: &Path,
+    audio_path: &Path,
+) -> bool {
+    let cue = match cue_reader.read(cue_path, false) {
         Ok(cue) => cue,
         Err(err) => {
             eprintln!(
@@ -98,10 +158,14 @@ fn cue_references_audio_file_sync(cue_path: &Path, audio_path: &Path) -> bool {
         .any(|candidate| candidate == audio_path)
 }
 
-fn filter_cue_files_for_audio_sync(cue_files: Vec<PathBuf>, audio_path: &Path) -> Vec<PathBuf> {
+fn filter_cue_files_for_audio_sync(
+    cue_reader: &CueReader,
+    cue_files: Vec<PathBuf>,
+    audio_path: &Path,
+) -> Vec<PathBuf> {
     cue_files
         .into_iter()
-        .filter(|cue_path| cue_references_audio_file_sync(cue_path, audio_path))
+        .filter(|cue_path| cue_references_audio_file_sync(cue_reader, cue_path, audio_path))
         .collect()
 }
 
@@ -127,6 +191,11 @@ mod tests {
 
     use super::FilesystemCueInputInspector;
     use crate::application::ports::{CueInputInspector, CueReferencedAudioInput};
+    use crate::cue_file::CueReader;
+
+    fn inspector() -> FilesystemCueInputInspector {
+        FilesystemCueInputInspector::new(CueReader::default())
+    }
 
     #[tokio::test]
     async fn snapshot_inputs_returns_cue_size_and_existing_audio_inputs() {
@@ -140,10 +209,7 @@ mod tests {
         .unwrap();
         fs::write(&audio_path, b"audio").unwrap();
 
-        let snapshot = FilesystemCueInputInspector::new()
-            .snapshot_inputs(&cue_path)
-            .await
-            .unwrap();
+        let snapshot = inspector().snapshot_inputs(&cue_path).await.unwrap();
 
         assert!(snapshot.cue_size_bytes.is_some());
         assert_eq!(
@@ -165,10 +231,7 @@ mod tests {
         )
         .unwrap();
 
-        let snapshot = FilesystemCueInputInspector::new()
-            .snapshot_inputs(&cue_path)
-            .await
-            .unwrap();
+        let snapshot = inspector().snapshot_inputs(&cue_path).await.unwrap();
 
         assert!(snapshot.cue_size_bytes.is_some());
         assert!(snapshot.audio_inputs.is_empty());
@@ -180,10 +243,7 @@ mod tests {
         let cue_path = tmp.path().join("broken.cue");
         fs::write(&cue_path, "not a cue").unwrap();
 
-        let snapshot = FilesystemCueInputInspector::new()
-            .snapshot_inputs(&cue_path)
-            .await
-            .unwrap();
+        let snapshot = inspector().snapshot_inputs(&cue_path).await.unwrap();
 
         assert!(snapshot.cue_size_bytes.is_some());
         assert!(snapshot.audio_inputs.is_empty());
@@ -202,7 +262,7 @@ mod tests {
         )
         .unwrap();
 
-        let inspector = FilesystemCueInputInspector::new();
+        let inspector = inspector();
         assert!(inspector
             .cue_references_audio_file(&cue_path, &target_audio)
             .await
@@ -220,7 +280,7 @@ mod tests {
         let audio_path = tmp.path().join("target.flac");
         fs::write(&cue_path, "not a cue").unwrap();
 
-        let matches = FilesystemCueInputInspector::new()
+        let matches = inspector()
             .cue_references_audio_file(&cue_path, &audio_path)
             .await
             .unwrap();

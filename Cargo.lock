@@ -1583,6 +1583,7 @@ dependencies = [
  "clap",
  "config",
  "directories",
+ "encoding_rs",
  "maud",
  "rcue",
  "regex",

@@ -16,6 +16,7 @@ pub struct Cli {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct CueSettings {
     pub strict: bool,
+    pub legacy_encodings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -115,6 +116,10 @@ impl Settings {
             .set_default("musicbrainz.trust_disc_lookup", false)?
             .set_default("musicbrainz.add_missing_release_group_enabled", false)?
             .set_default("cue.strict", false)?
+            .set_default(
+                "cue.legacy_encodings",
+                crate::cue_file::DEFAULT_LEGACY_ENCODING_LABELS.to_vec(),
+            )?
             .set_default("lidarr.queue_page_size", 100)?
             .set_default("lidarr.queue_max_pages", 100)?
             .set_default("lidarr.manual_import_enabled", true)?
@@ -137,7 +142,9 @@ impl Settings {
                 Environment::with_prefix("SPLITTARR")
                     .prefix_separator("_")
                     .separator("__")
-                    .try_parsing(true),
+                    .try_parsing(true)
+                    .list_separator(",")
+                    .with_list_parse_key("cue.legacy_encodings"),
             )
             .build()?;
 
@@ -268,6 +275,7 @@ add_missing_release_group_enabled = true
 
 [cue]
 strict = true
+legacy_encodings = ["windows-1250", "iso-8859-2"]
 
 [shnsplit]
 path = "/usr/bin/shnsplit"
@@ -292,6 +300,10 @@ format = "%n - %t"
         assert!(settings.musicbrainz.trust_disc_lookup);
         assert!(settings.musicbrainz.add_missing_release_group_enabled);
         assert!(settings.cue.strict);
+        assert_eq!(
+            settings.cue.legacy_encodings,
+            ["windows-1250", "iso-8859-2"]
+        );
         assert_eq!(settings.lidarr.url, "http://lidarr");
         assert_eq!(settings.lidarr.queue_page_size, 25);
         assert_eq!(settings.lidarr.queue_max_pages, 20);
@@ -333,6 +345,7 @@ api_key = "file-secret"
             "true",
         );
         std::env::set_var("SPLITTARR_SERVER__BIND_ADDRESS", "0.0.0.0:1234");
+        std::env::set_var("SPLITTARR_CUE__LEGACY_ENCODINGS", "windows-1250,iso-8859-2");
 
         let settings =
             Settings::load_with_paths(Some(config_path), tmp.path().join("default"), None).unwrap();
@@ -349,6 +362,7 @@ api_key = "file-secret"
         std::env::remove_var("SPLITTARR_MUSICBRAINZ__TRUST_DISC_LOOKUP");
         std::env::remove_var("SPLITTARR_MUSICBRAINZ__ADD_MISSING_RELEASE_GROUP_ENABLED");
         std::env::remove_var("SPLITTARR_SERVER__BIND_ADDRESS");
+        std::env::remove_var("SPLITTARR_CUE__LEGACY_ENCODINGS");
 
         assert_eq!(settings.check_frequency_seconds, 9);
         assert_eq!(settings.lidarr.url, "http://from-env");
@@ -363,6 +377,10 @@ api_key = "file-secret"
         assert!(settings.musicbrainz.trust_disc_lookup);
         assert!(settings.musicbrainz.add_missing_release_group_enabled);
         assert_eq!(settings.server.bind_address, "0.0.0.0:1234");
+        assert_eq!(
+            settings.cue.legacy_encodings,
+            ["windows-1250", "iso-8859-2"]
+        );
     }
 
     #[test]
@@ -391,6 +409,10 @@ api_key = "secret"
         assert_eq!(settings.musicbrainz.base_url, "https://musicbrainz.org");
         assert!(!settings.musicbrainz.trust_disc_lookup);
         assert!(!settings.musicbrainz.add_missing_release_group_enabled);
+        assert_eq!(
+            settings.cue.legacy_encodings,
+            ["windows-1251", "windows-1250"]
+        );
         assert!(settings.lidarr.manual_import_enabled);
     }
 
@@ -486,5 +508,6 @@ disc_lookup_enabled = true
         std::env::remove_var("SPLITTARR_MUSICBRAINZ__TRUST_DISC_LOOKUP");
         std::env::remove_var("SPLITTARR_MUSICBRAINZ__ADD_MISSING_RELEASE_GROUP_ENABLED");
         std::env::remove_var("SPLITTARR_SERVER__BIND_ADDRESS");
+        std::env::remove_var("SPLITTARR_CUE__LEGACY_ENCODINGS");
     }
 }
