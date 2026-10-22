@@ -100,8 +100,9 @@ impl CueReader {
         utf8_error: std::str::Utf8Error,
     ) -> Result<DecodedCue> {
         let mut failures = Vec::new();
-        let mut candidates = Vec::new();
 
+        // ASCII FILE names resolve under every single-byte encoding, so the
+        // configured order decides which one wins.
         for &encoding in self.legacy_encodings.as_ref() {
             let label = encoding.name();
             let (decoded, had_errors) = encoding.decode_without_bom_handling(bytes);
@@ -132,52 +133,22 @@ impl CueReader {
                 continue;
             }
 
-            candidates.push(LegacyCandidate {
-                label,
+            eprintln!("Decoded legacy CUE {} using {label}", cue_path.display());
+            return Ok(DecodedCue {
                 cue,
-                contents: decoded.into_owned(),
+                legacy_contents: Some(decoded.into_owned()),
             });
         }
 
-        if candidates.is_empty() {
-            let failures = if failures.is_empty() {
-                "no legacy encodings are configured".to_owned()
-            } else {
-                failures.join("; ")
-            };
-            return Err(anyhow!(
-                "failed to decode legacy cue file {}: input is not valid UTF-8 ({utf8_error}); no candidate decoding resolved all FILE references ({failures})",
-                cue_path.display()
-            ));
-        }
-
-        if candidates.len() > 1
-            && candidates
-                .iter()
-                .skip(1)
-                .any(|candidate| candidate.contents != candidates[0].contents)
-        {
-            let labels = candidates
-                .iter()
-                .map(|candidate| candidate.label)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow!(
-                "ambiguous legacy cue encoding for {}: {labels} all resolve every FILE reference but produce different text",
-                cue_path.display()
-            ));
-        }
-
-        let candidate = candidates.remove(0);
-        eprintln!(
-            "Decoded legacy CUE {} using {}",
-            cue_path.display(),
-            candidate.label
-        );
-        Ok(DecodedCue {
-            cue: candidate.cue,
-            legacy_contents: Some(candidate.contents),
-        })
+        let failures = if failures.is_empty() {
+            "no legacy encodings are configured".to_owned()
+        } else {
+            failures.join("; ")
+        };
+        Err(anyhow!(
+            "failed to decode legacy cue file {}: input is not valid UTF-8 ({utf8_error}); no candidate decoding resolved all FILE references ({failures})",
+            cue_path.display()
+        ))
     }
 }
 
@@ -211,12 +182,6 @@ pub(crate) struct PreparedCue {
 struct DecodedCue {
     cue: Cue,
     legacy_contents: Option<String>,
-}
-
-struct LegacyCandidate {
-    label: &'static str,
-    cue: Cue,
-    contents: String,
 }
 
 fn cue_directory(cue_path: &Path) -> Result<&Path> {
@@ -353,22 +318,23 @@ FILE \"can\xE7\xE3o.flac\" WAVE\n\
     }
 
     #[test]
-    fn rejects_legacy_cue_when_multiple_encodings_resolve_the_same_ascii_file() {
+    fn uses_first_configured_encoding_when_ascii_file_resolves_under_several() {
         let tmp = tempdir().unwrap();
-        let cue_path = tmp.path().join("ambiguous.cue");
+        let cue_path = tmp.path().join("CDImage.cue");
         fs::write(
             &cue_path,
-            b"TITLE \"\xC0lbum\"\nFILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:00\n",
+            b"TITLE \"\xC0lbum\"\nFILE \"CDImage.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:00\n",
         )
         .unwrap();
-        fs::write(tmp.path().join("album.flac"), b"audio").unwrap();
+        fs::write(tmp.path().join("CDImage.flac"), b"audio").unwrap();
 
-        let err = CueReader::default().read(&cue_path, true).unwrap_err();
-        let message = err.to_string();
+        let cyrillic_first = CueReader::default().read(&cue_path, true).unwrap();
+        let latin2_first = CueReader::new(["windows-1250", "windows-1251"])
+            .unwrap()
+            .read(&cue_path, true)
+            .unwrap();
 
-        assert!(message.contains("ambiguous legacy cue encoding"));
-        assert!(message.contains("windows-1251"));
-        assert!(message.contains("windows-1250"));
-        assert!(message.contains("resolve every FILE reference"));
+        assert_eq!(cyrillic_first.title.as_deref(), Some("Аlbum"));
+        assert_eq!(latin2_first.title.as_deref(), Some("Ŕlbum"));
     }
 }
