@@ -149,6 +149,13 @@ impl Settings {
             .build()?;
 
         let mut settings = config.try_deserialize::<Settings>()?;
+        settings.cue.legacy_encodings = settings
+            .cue
+            .legacy_encodings
+            .iter()
+            .map(|label| label.trim().to_owned())
+            .filter(|label| !label.is_empty())
+            .collect();
         settings.gnudb.server = normalize_gnudb_server(&settings.gnudb.server)?;
         settings.musicbrainz.base_url =
             normalize_musicbrainz_base_url(&settings.musicbrainz.base_url)?;
@@ -414,6 +421,35 @@ api_key = "secret"
             ["windows-1251", "windows-1250"]
         );
         assert!(settings.lidarr.manual_import_enabled);
+    }
+
+    #[test]
+    fn blank_legacy_encodings_environment_disables_fallbacks() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_test_env();
+        let tmp = tempdir().unwrap();
+        let config_path = tmp.path().join("splittarr.toml");
+        fs::write(
+            &config_path,
+            r#"
+[lidarr]
+url = "http://lidarr"
+api_key = "secret"
+"#,
+        )
+        .unwrap();
+
+        std::env::set_var("SPLITTARR_CUE__LEGACY_ENCODINGS", "");
+        let disabled =
+            Settings::load_with_paths(Some(config_path.clone()), tmp.path().join("default"), None)
+                .unwrap();
+        std::env::set_var("SPLITTARR_CUE__LEGACY_ENCODINGS", " windows-1250 , ");
+        let padded =
+            Settings::load_with_paths(Some(config_path), tmp.path().join("default"), None).unwrap();
+        std::env::remove_var("SPLITTARR_CUE__LEGACY_ENCODINGS");
+
+        assert!(disabled.cue.legacy_encodings.is_empty());
+        assert_eq!(padded.cue.legacy_encodings, ["windows-1250"]);
     }
 
     #[test]
