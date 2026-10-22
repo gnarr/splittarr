@@ -96,6 +96,7 @@ services:
       SPLITTARR_GNUDB__SERVER: gnudb.gnudb.org
       SPLITTARR_GNUDB__USER_EMAIL: ""
       SPLITTARR_CUE__STRICT: "false"
+      SPLITTARR_CUE__LEGACY_ENCODINGS: "windows-1251,windows-1250"
       SPLITTARR_SHNSPLIT__PATH: shnsplit
       SPLITTARR_SHNSPLIT__OVERWRITE: "true"
       SPLITTARR_SHNSPLIT__FORMAT: "%p - %a - %n - %t"
@@ -160,6 +161,7 @@ manual_import_enabled = true
 
 [cue]
 strict = false
+legacy_encodings = ["windows-1251", "windows-1250"]
 
 [shnsplit]
 path = "shnsplit"
@@ -195,6 +197,7 @@ export SPLITTARR_MUSICBRAINZ__DISC_LOOKUP_ENABLED=true
 export SPLITTARR_MUSICBRAINZ__BASE_URL=https://musicbrainz.org
 export SPLITTARR_MUSICBRAINZ__TRUST_DISC_LOOKUP=false
 export SPLITTARR_MUSICBRAINZ__ADD_MISSING_RELEASE_GROUP_ENABLED=false
+export SPLITTARR_CUE__LEGACY_ENCODINGS=windows-1251,windows-1250
 export SPLITTARR_CHECK_FREQUENCY_SECONDS=60
 export SPLITTARR_SERVER__BIND_ADDRESS=127.0.0.1:9899
 export SPLITTARR_SHNSPLIT__FORMAT="%p - %a - %n - %t"
@@ -221,9 +224,12 @@ splittarr
 | `lidarr.api_key`          | `SPLITTARR_LIDARR__API_KEY`         | required                               | Lidarr API key.                                            |
 | `lidarr.manual_import_enabled` | `SPLITTARR_LIDARR__MANUAL_IMPORT_ENABLED` | `true` | Whether Splittarr should ask Lidarr to manually import generated tracks after splitting. |
 | `cue.strict`              | `SPLITTARR_CUE__STRICT`             | `false`                                | Whether CUE parsing should run in strict mode.             |
+| `cue.legacy_encodings`    | `SPLITTARR_CUE__LEGACY_ENCODINGS`   | `windows-1251, windows-1250`           | Comma-separated legacy encoding labels to try after UTF-8 fails. TOML uses an array of strings. |
 | `shnsplit.path`           | `SPLITTARR_SHNSPLIT__PATH`          | `shnsplit`                             | Path to the `shnsplit` executable.                         |
 | `shnsplit.overwrite`      | `SPLITTARR_SHNSPLIT__OVERWRITE`     | `true`                                 | Whether `shnsplit` should overwrite existing output files. |
 | `shnsplit.format`         | `SPLITTARR_SHNSPLIT__FORMAT`        | `%p - %a - %n - %t`                    | Output filename format passed to `shnsplit -t`.            |
+
+Splittarr always tries UTF-8 before `cue.legacy_encodings`. Legacy values may use labels recognized by `encoding_rs`, such as `windows-1252` or `shift_jis`; invalid labels stop Splittarr during startup. A legacy decoding is accepted only when the CUE parses and every `FILE` reference exists relative to the CUE directory. If multiple configured encodings resolve all references but produce different text, Splittarr reports an ambiguity instead of guessing; configure only the correct encoding for that library or download source. Set the TOML value to `[]` to disable legacy fallbacks.
 
 MusicBrainz lookup is enabled by default. Splittarr reads referenced WAV/FLAC lengths, calculates a true MusicBrainz Disc ID, asks MusicBrainz `/ws/2/discid`, and selects a Lidarr release when MusicBrainz and Lidarr agree on a compatible release. If MusicBrainz is disabled or inconclusive, Splittarr falls back to GnuDB.
 

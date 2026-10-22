@@ -5,14 +5,15 @@ use std::process::Command;
 use std::time::SystemTime;
 
 use anyhow::{anyhow, Result};
-use rcue::parser::parse_from_file;
 use regex::bytes::Regex;
 
 use crate::application::ports::CueSplitter;
+use crate::cue_file::CueReader;
 use crate::domain::{SplitOutcome, SplitStatus};
 
 #[derive(Debug, Clone)]
 pub struct ShnsplitCueSplitter {
+    cue_reader: CueReader,
     cue_strict: bool,
     shnsplit_path: PathBuf,
     overwrite: bool,
@@ -20,8 +21,15 @@ pub struct ShnsplitCueSplitter {
 }
 
 impl ShnsplitCueSplitter {
-    pub fn new(cue_strict: bool, shnsplit_path: PathBuf, overwrite: bool, format: String) -> Self {
+    pub fn new(
+        cue_reader: CueReader,
+        cue_strict: bool,
+        shnsplit_path: PathBuf,
+        overwrite: bool,
+        format: String,
+    ) -> Self {
         Self {
+            cue_reader,
             cue_strict,
             shnsplit_path,
             overwrite,
@@ -42,25 +50,26 @@ impl CueSplitter for ShnsplitCueSplitter {
 
 impl ShnsplitCueSplitter {
     fn split_cue_sync(&self, cue_path: &Path) -> Result<SplitOutcome> {
-        let cue_path_str = cue_path
-            .to_str()
-            .ok_or_else(|| anyhow!("cue path is not valid UTF-8: {}", cue_path.display()))?;
         let cue_dir = cue_path
             .parent()
             .ok_or_else(|| anyhow!("cue file has no parent directory: {}", cue_path.display()))?;
-        let cue_file_name = cue_path
+        let prepared_cue = self
+            .cue_reader
+            .prepare(cue_path, cue_dir, self.cue_strict)?;
+        let cue_file_name = prepared_cue
+            .command_path
             .file_name()
-            .ok_or_else(|| anyhow!("cue file name is not valid UTF-8: {}", cue_path.display()))?;
+            .ok_or_else(|| anyhow!("cue file has no file name: {}", cue_path.display()))?;
 
-        let cue = parse_from_file(cue_path_str, self.cue_strict)
-            .map_err(|err| anyhow!("failed to parse cue file {}: {err}", cue_path.display()))?;
-        let expected_tracks = cue
+        let expected_tracks = prepared_cue
+            .cue
             .files
             .iter()
             .map(|file| file.tracks.len())
             .sum::<usize>();
 
-        let referenced_files = cue
+        let referenced_files = prepared_cue
+            .cue
             .files
             .iter()
             .map(|file| file.file.as_str())
@@ -347,7 +356,7 @@ fn sanitize_file_name_str(value: &str) -> String {
     let mut sanitized = String::with_capacity(value.len());
     let mut previous_was_underscore = false;
     for ch in value.chars() {
-        match ascii_replacement_for_char(ch) {
+        match filename_replacement_for_char(ch) {
             CharReplacement::Char(ch) => {
                 sanitized.push(ch);
                 previous_was_underscore = false;
@@ -402,16 +411,15 @@ enum CharReplacement {
     Underscore,
 }
 
-fn ascii_replacement_for_char(ch: char) -> CharReplacement {
+fn filename_replacement_for_char(ch: char) -> CharReplacement {
     match ch {
-        'A'..='Z' | 'a'..='z' | '0'..='9' | ' ' | '.' | '-' | '_' | '\'' => {
-            CharReplacement::Char(ch)
-        }
         '\u{2018}' | '\u{2019}' => CharReplacement::Char('\''),
         '\u{201C}' | '\u{201D}' => CharReplacement::Char('\''),
         '\u{2013}' | '\u{2014}' => CharReplacement::Char('-'),
         '\u{2026}' => CharReplacement::Str("..."),
-        _ => CharReplacement::Underscore,
+        '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => CharReplacement::Underscore,
+        _ if ch.is_control() => CharReplacement::Underscore,
+        _ => CharReplacement::Char(ch),
     }
 }
 
@@ -498,9 +506,9 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     use std::ffi::OsString;
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     use std::os::unix::ffi::OsStringExt;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -512,6 +520,7 @@ mod tests {
         parse_generated_tracks, sanitize_file_name_str, snapshot_audio_files_best_effort,
         ShnsplitCueSplitter,
     };
+    use crate::cue_file::CueReader;
     use crate::domain::SplitStatus;
 
     #[test]
@@ -520,7 +529,7 @@ mod tests {
         let cue_path = write_fixture_album(tmp.path(), true);
         let fake = write_fake_shnsplit(
             tmp.path(),
-            r#"touch "Artist - Album - 01 - Track One.flac"
+            r#": > "Artist - Album - 01 - Track One.flac"
 echo "Splitting [album.flac] (0:01.00) --> [Artist - Album - 01 - Track One.flac] (0:01.00) :" >&2
 exit 0
 "#,
@@ -568,6 +577,81 @@ exit 2
     }
 
     #[test]
+    fn splits_windows_1251_cue_via_temporary_utf8_copy() {
+        assert_legacy_cue_split(WINDOWS_1251_CUE, "альбом.flac", "TITLE \"Альбом\"");
+    }
+
+    #[test]
+    fn splits_windows_1250_cue_via_temporary_utf8_copy() {
+        assert_legacy_cue_split(WINDOWS_1250_CUE, "żółć.flac", "TITLE \"Żółć\"");
+    }
+
+    #[test]
+    fn splits_cue_with_configured_encoding_outside_defaults() {
+        assert_legacy_cue_split_with_reader(
+            CueReader::new(["windows-1252"]).unwrap(),
+            WINDOWS_1252_CUE,
+            "canção.flac",
+            "TITLE \"Canção\"",
+        );
+    }
+
+    #[test]
+    fn removes_temporary_utf8_cue_when_shnsplit_fails() {
+        let tmp = tempdir().unwrap();
+        let cue_path = tmp.path().join("legacy.cue");
+        fs::write(&cue_path, WINDOWS_1251_CUE).unwrap();
+        fs::write(tmp.path().join("альбом.flac"), b"audio").unwrap();
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            r#"cue_file=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-f" ]; then
+    cue_file=$2
+    break
+  fi
+  shift
+done
+printf '%s' "$cue_file" > cue-argument.log
+while IFS= read -r line || [ -n "$line" ]; do
+  printf '%s\n' "$line"
+done < "$cue_file" > cue-content.log
+echo "split failed" >&2
+exit 2
+"#,
+        );
+        let splitter = test_splitter(fake);
+
+        let err = splitter.split_cue_sync(&cue_path).unwrap_err();
+
+        assert!(err.to_string().contains("shnsplit failed"));
+        let temporary_name = fs::read_to_string(tmp.path().join("cue-argument.log")).unwrap();
+        assert!(!tmp.path().join(temporary_name).exists());
+        assert_eq!(fs::read(&cue_path).unwrap(), WINDOWS_1251_CUE);
+        assert_no_temporary_cues(tmp.path());
+    }
+
+    #[test]
+    fn errors_when_no_legacy_decoding_resolves_referenced_files() {
+        let tmp = tempdir().unwrap();
+        let cue_path = tmp.path().join("legacy.cue");
+        fs::write(&cue_path, WINDOWS_1251_CUE).unwrap();
+        let fake = write_fake_shnsplit(tmp.path(), ": > shnsplit-was-invoked\nexit 1\n");
+        let splitter = test_splitter(fake);
+
+        let err = splitter.split_cue_sync(&cue_path).unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("input is not valid UTF-8"));
+        assert!(message.contains("no candidate decoding resolved all FILE references"));
+        assert!(message.contains("windows-1251: referenced files do not exist"));
+        assert!(message.contains("windows-1250: referenced files do not exist"));
+        assert!(!tmp.path().join("shnsplit-was-invoked").exists());
+        assert_eq!(fs::read(&cue_path).unwrap(), WINDOWS_1251_CUE);
+        assert_no_temporary_cues(tmp.path());
+    }
+
+    #[test]
     fn parses_generated_tracks_relative_to_cue_directory() {
         let tmp = tempdir().unwrap();
         let stderr = "Splitting [album.flac] (0:01.00) --> [01 - Track.flac] (0:01.00) :";
@@ -577,7 +661,7 @@ exit 2
         assert_eq!(tracks, vec![tmp.path().join("01 - Track.flac")]);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn splitter_sanitizes_non_utf8_track_paths_from_stderr() {
         let tmp = tempdir().unwrap();
@@ -604,7 +688,27 @@ exit 0
         assert!(!raw_path.exists());
     }
 
-    #[cfg(unix)]
+    #[test]
+    fn splitter_preserves_unicode_track_filename() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_fixture_album(tmp.path(), true);
+        let track_name = "Тестовий Виконавець - Тестова Збірка - 01 - Вигадана Пісня.flac";
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            &format!(
+                ": > \"{track_name}\"\nprintf 'Splitting [album.flac] (0:01.00) --> [{track_name}] (0:01.00) :\\n' >&2\nexit 0\n"
+            ),
+        );
+        let splitter = test_splitter(fake);
+
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
+
+        assert_eq!(result.status, SplitStatus::Split);
+        assert_eq!(result.tracks, vec![tmp.path().join(track_name)]);
+        assert!(result.tracks[0].exists());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn splitter_reconciles_directory_tracks_when_detection_misses_non_utf8_names() {
         let tmp = tempdir().unwrap();
@@ -664,12 +768,12 @@ exit 0
     }
 
     #[test]
-    fn sanitizes_unicode_punctuation_and_remaining_non_ascii() {
+    fn normalizes_unicode_punctuation_and_preserves_unicode_letters() {
         let sanitized = sanitize_file_name_str(
-            "Artist - Album - 02 - \u{201C}Cafe\u{201D}\u{2014}deja vu\u{2026}.flac",
+            "Artist - Album - 02 - \u{201C}Café\u{201D}\u{2014}déjà vu\u{2026}.flac",
         );
 
-        assert_eq!(sanitized, "Artist - Album - 02 - 'Cafe'-deja vu....flac");
+        assert_eq!(sanitized, "Artist - Album - 02 - 'Café'-déjà vu....flac");
     }
 
     #[cfg(unix)]
@@ -687,7 +791,7 @@ exit 0
 
     #[test]
     fn sanitizer_collapses_underscores_and_trims_edges() {
-        let sanitized = sanitize_file_name_str("  \u{00E9}\u{00E5} Track \u{266B}.flac  ");
+        let sanitized = sanitize_file_name_str("  :* Track ?.flac  ");
 
         assert_eq!(sanitized, "Track _.flac");
     }
@@ -695,9 +799,9 @@ exit 0
     #[test]
     fn generated_track_rename_preflight_rejects_duplicate_sanitized_targets() {
         let tmp = tempdir().unwrap();
-        let first = tmp.path().join("Artist - Album - 01 - caf\u{00E9}.flac");
-        let second = tmp.path().join("Artist - Album - 01 - caf\u{00E5}.flac");
-        let target = tmp.path().join("Artist - Album - 01 - caf_.flac");
+        let first = tmp.path().join("Artist - Album - 01 - caf\u{2018}.flac");
+        let second = tmp.path().join("Artist - Album - 01 - caf\u{2019}.flac");
+        let target = tmp.path().join("Artist - Album - 01 - caf'.flac");
         fs::write(&first, "first").unwrap();
         fs::write(&second, "second").unwrap();
 
@@ -712,7 +816,7 @@ exit 0
         assert!(!target.exists());
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn splitter_fails_when_sanitized_track_path_collides() {
         let tmp = tempdir().unwrap();
@@ -767,7 +871,7 @@ exit 0
         let cue_path = write_fixture_album(tmp.path(), true);
         let fake = write_fake_shnsplit(
             tmp.path(),
-            r#"touch "Artist - Album - 01 - Track One.flac"
+            r#": > "Artist - Album - 01 - Track One.flac"
 echo "split complete" >&2
 exit 0
 "#,
@@ -789,7 +893,7 @@ exit 0
         let cue_path = write_two_track_fixture_album(tmp.path());
         let fake = write_fake_shnsplit(
             tmp.path(),
-            r#"touch "Artist - Album - 01 - Track One.flac"
+            r#": > "Artist - Album - 01 - Track One.flac"
 echo "split complete" >&2
 exit 0
 "#,
@@ -810,7 +914,7 @@ exit 0
         let fake = write_fake_shnsplit(
             tmp.path(),
             &format!(
-                "printf '%s\\n' \"$@\" > \"{}\"\ntouch \"Artist - Album - 01 - Track One.flac\"\necho \"Splitting [album.flac] (0:01.00) --> [Artist - Album - 01 - Track One.flac] (0:01.00) :\" >&2\nexit 0\n",
+                "printf '%s\\n' \"$@\" > \"{}\"\n: > \"Artist - Album - 01 - Track One.flac\"\necho \"Splitting [album.flac] (0:01.00) --> [Artist - Album - 01 - Track One.flac] (0:01.00) :\" >&2\nexit 0\n",
                 args_log.display()
             ),
         );
@@ -818,9 +922,13 @@ exit 0
 
         splitter.split_cue_sync(&cue_path).unwrap();
         let args = fs::read_to_string(args_log).unwrap();
+        let args = args.lines().collect::<Vec<_>>();
 
-        assert!(args.contains("-i"));
-        assert!(args.contains("flac flac -cd -s %f"));
+        assert!(args.contains(&"-i"));
+        assert!(args.contains(&"flac flac -cd -s %f"));
+        let cue_arg_index = args.iter().position(|arg| *arg == "-f").unwrap() + 1;
+        assert_eq!(args[cue_arg_index], "album.cue");
+        assert_no_temporary_cues(tmp.path());
     }
 
     #[test]
@@ -835,7 +943,86 @@ exit 0
     }
 
     fn test_splitter(shnsplit_path: PathBuf) -> ShnsplitCueSplitter {
-        ShnsplitCueSplitter::new(true, shnsplit_path, true, "%p - %a - %n - %t".into())
+        ShnsplitCueSplitter::new(
+            CueReader::default(),
+            true,
+            shnsplit_path,
+            true,
+            "%p - %a - %n - %t".into(),
+        )
+    }
+
+    fn assert_legacy_cue_split(fixture: &[u8], audio_file_name: &str, decoded_title: &str) {
+        assert_legacy_cue_split_with_reader(
+            CueReader::default(),
+            fixture,
+            audio_file_name,
+            decoded_title,
+        );
+    }
+
+    fn assert_legacy_cue_split_with_reader(
+        cue_reader: CueReader,
+        fixture: &[u8],
+        audio_file_name: &str,
+        decoded_title: &str,
+    ) {
+        let tmp = tempdir().unwrap();
+        let cue_path = tmp.path().join("legacy.cue");
+        fs::write(&cue_path, fixture).unwrap();
+        fs::write(tmp.path().join(audio_file_name), b"audio").unwrap();
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            r#"cue_file=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-f" ]; then
+    cue_file=$2
+    break
+  fi
+  shift
+done
+printf '%s' "$cue_file" > cue-argument.log
+while IFS= read -r line || [ -n "$line" ]; do
+  printf '%s\n' "$line"
+done < "$cue_file" > cue-content.log
+: > "Artist - Album - 01 - Track One.flac"
+echo "Splitting [input.flac] (0:01.00) --> [Artist - Album - 01 - Track One.flac] (0:01.00) :" >&2
+exit 0
+"#,
+        );
+        let splitter =
+            ShnsplitCueSplitter::new(cue_reader, true, fake, true, "%p - %a - %n - %t".into());
+
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
+
+        assert_eq!(result.status, SplitStatus::Split);
+        assert_eq!(
+            result.tracks,
+            vec![tmp.path().join("Artist - Album - 01 - Track One.flac")]
+        );
+        assert_eq!(fs::read(&cue_path).unwrap(), fixture);
+        let temporary_name = fs::read_to_string(tmp.path().join("cue-argument.log")).unwrap();
+        assert_ne!(temporary_name, "legacy.cue");
+        assert!(temporary_name.starts_with(".splittarr-cue-"));
+        assert!(!tmp.path().join(&temporary_name).exists());
+        let temporary_contents = fs::read_to_string(tmp.path().join("cue-content.log")).unwrap();
+        assert!(temporary_contents.contains(decoded_title));
+        assert!(temporary_contents.contains(&format!("FILE \"{audio_file_name}\" WAVE")));
+        assert_no_temporary_cues(tmp.path());
+    }
+
+    fn assert_no_temporary_cues(dir: &Path) {
+        let temporary_cues = fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".splittarr-cue-")
+            })
+            .collect::<Vec<_>>();
+        assert!(temporary_cues.is_empty());
     }
 
     fn write_fixture_album(dir: &Path, with_audio: bool) -> PathBuf {
@@ -880,6 +1067,7 @@ FILE "album.flac" WAVE
         cue_path
     }
 
+    #[cfg(all(unix, not(target_os = "macos")))]
     fn write_ten_track_fixture_album(dir: &Path) -> PathBuf {
         let cue_path = dir.join("album.cue");
         let mut cue = String::from(
@@ -913,4 +1101,28 @@ FILE "album.flac" WAVE
         }
         path
     }
+
+    const WINDOWS_1251_CUE: &[u8] = b"PERFORMER \"\xC0\xF0\xF2\xE8\xF1\xF2\"\n\
+TITLE \"\xC0\xEB\xFC\xE1\xEE\xEC\"\n\
+FILE \"\xE0\xEB\xFC\xE1\xEE\xEC.flac\" WAVE\n\
+  TRACK 01 AUDIO\n\
+    TITLE \"\xCF\xF0\xE8\xE2\xE5\xF2\"\n\
+    PERFORMER \"\xC0\xF0\xF2\xE8\xF1\xF2\"\n\
+    INDEX 01 00:00:00\n";
+
+    const WINDOWS_1250_CUE: &[u8] = b"PERFORMER \"\xA3ukasz\"\n\
+TITLE \"\xAF\xF3\xB3\xE6\"\n\
+FILE \"\xBF\xF3\xB3\xE6.flac\" WAVE\n\
+  TRACK 01 AUDIO\n\
+    TITLE \"Track One\"\n\
+    PERFORMER \"\xA3ukasz\"\n\
+    INDEX 01 00:00:00\n";
+
+    const WINDOWS_1252_CUE: &[u8] = b"PERFORMER \"Artista\"\n\
+TITLE \"Can\xE7\xE3o\"\n\
+FILE \"can\xE7\xE3o.flac\" WAVE\n\
+  TRACK 01 AUDIO\n\
+    TITLE \"Faixa\"\n\
+    PERFORMER \"Artista\"\n\
+    INDEX 01 00:00:00\n";
 }
