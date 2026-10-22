@@ -4,7 +4,6 @@ use anyhow::{anyhow, Result};
 use walkdir::WalkDir;
 
 use crate::application::ports::CueScanner;
-use crate::cue_file::TEMPORARY_CUE_PREFIX;
 use crate::domain::DiscoveredCueSheets;
 
 #[derive(Debug, Clone, Default)]
@@ -55,14 +54,6 @@ fn find_cue_files(root: &Path) -> Result<DiscoveredCueSheets> {
             continue;
         }
 
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with(TEMPORARY_CUE_PREFIX))
-        {
-            continue;
-        }
-
         let is_cue = entry
             .path()
             .extension()
@@ -109,18 +100,5 @@ mod tests {
         assert!(err
             .to_string()
             .contains("download output path does not exist"));
-    }
-
-    #[test]
-    fn ignores_splittarr_temporary_cue_files() {
-        let tmp = tempdir().unwrap();
-        let cue = tmp.path().join("album.cue");
-        fs::write(&cue, "").unwrap();
-        fs::write(tmp.path().join(".splittarr-cue-random.cue"), "").unwrap();
-
-        let scan = find_cue_files(tmp.path()).unwrap();
-
-        assert_eq!(scan.cue_files, vec![cue]);
-        assert!(scan.errors.is_empty());
     }
 }
