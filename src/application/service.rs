@@ -170,6 +170,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{MonitorService, ProcessingAdapters};
+    use crate::adapters::filesystem_cleanup::FilesystemTrackCleanup;
+    use crate::adapters::filesystem_download_log::FilesystemDownloadLog;
     use crate::adapters::sqlite_download_store::SqliteDownloadStore;
     use crate::application::ports::{
         CueInputInspector, CueInputSnapshot, CueMetadataHint, CueReferencedAudioInput, CueScanner,
@@ -395,5 +397,123 @@ FILE "album.flac" WAVE
             TrackCleanupStatus::Deleted
         );
         assert!(completed.completed_at.is_some());
+    }
+
+    struct RejectingSplitter {
+        written: Vec<PathBuf>,
+        calls: Mutex<usize>,
+    }
+
+    impl CueSplitter for RejectingSplitter {
+        async fn split_cue(&self, _cue_path: &Path) -> anyhow::Result<SplitOutcome> {
+            *self.calls.lock().unwrap() += 1;
+            for track in &self.written {
+                fs::write(track, b"track").unwrap();
+            }
+            Ok(SplitOutcome {
+                status: SplitStatus::Failed,
+                tracks: self.written.clone(),
+                message: Some("shnsplit generated 2 track(s) but cue contains 1 track(s)".into()),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn run_once_removes_every_file_a_rejected_split_wrote_once_the_download_leaves_the_queue()
+    {
+        let tmp = tempdir().unwrap();
+        let album_dir = tmp.path().join("album");
+        fs::create_dir_all(&album_dir).unwrap();
+        let cue_path = album_dir.join("album.cue");
+        let audio_path = album_dir.join("album.flac");
+        let download_log = album_dir.join("splittarr.log");
+        let written = vec![
+            album_dir.join("00 - pregap.flac"),
+            album_dir.join("01 - Track.flac"),
+        ];
+        fs::write(
+            &cue_path,
+            "FILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:32\n",
+        )
+        .unwrap();
+        fs::write(&audio_path, b"audio").unwrap();
+
+        let snapshot_active = QueueSnapshot {
+            total_records: 1,
+            pages_fetched: 1,
+            active_download_ids: HashSet::from(["download-1".to_owned()]),
+            failed_imports: vec![FailedImportCandidate {
+                download_id: "download-1".into(),
+                title: "Album".into(),
+                status: "completed".into(),
+                output_path: album_dir.to_string_lossy().to_string(),
+                tracked_download_state: "importFailed".into(),
+            }],
+        };
+        let snapshot_gone = QueueSnapshot {
+            total_records: 0,
+            pages_fetched: 1,
+            active_download_ids: HashSet::new(),
+            failed_imports: Vec::new(),
+        };
+        let queue = FakeQueue {
+            snapshots: Mutex::new(vec![
+                snapshot_active.clone(),
+                snapshot_active,
+                snapshot_gone,
+            ]),
+        };
+        let store = SqliteDownloadStore::open(tmp.path()).unwrap();
+        let service = MonitorService::new(
+            queue,
+            store.clone(),
+            ProcessingAdapters {
+                cue_scanner: FakeScanner {
+                    cue_path: cue_path.clone(),
+                },
+                cue_input_inspector: FakeInspector,
+                cue_splitter: RejectingSplitter {
+                    written: written.clone(),
+                    calls: Mutex::new(0),
+                },
+                manual_import: FakeManualImport,
+                download_log: FilesystemDownloadLog::new(true),
+                track_cleanup: FilesystemTrackCleanup::new(),
+            },
+            60,
+        );
+
+        service.run_once().await.unwrap();
+        service.run_once().await.unwrap();
+        let rejected = store
+            .get_tracked_download("download-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            rejected.lifecycle_state,
+            DownloadLifecycleState::AwaitingImport
+        );
+        assert!(rejected
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("cue contains 1 track(s)"));
+        assert_eq!(rejected.cue_sheets[0].tracks.len(), 2);
+        assert_eq!(*service.cue_splitter.calls.lock().unwrap(), 1);
+        assert!(written.iter().all(|track| track.exists()));
+        assert!(download_log.exists());
+
+        service.run_once().await.unwrap();
+        let completed = store
+            .get_tracked_download("download-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(completed.lifecycle_state, DownloadLifecycleState::Completed);
+        assert!(written.iter().all(|track| !track.exists()));
+        assert!(!download_log.exists());
+        assert!(cue_path.exists());
+        assert!(audio_path.exists());
     }
 }

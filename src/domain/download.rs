@@ -61,10 +61,6 @@ impl TrackedDownload {
             self.generated_track_count
         }
     }
-
-    pub fn has_generated_tracks(&self) -> bool {
-        self.generated_track_count() > 0
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

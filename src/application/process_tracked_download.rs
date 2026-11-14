@@ -102,6 +102,7 @@ where
 
     let mut all_cues_complete = true;
     let mut failures = Vec::new();
+    let mut rejected_splits = Vec::new();
     let mut generated_tracks = Vec::new();
     let mut cue_hints = Vec::new();
 
@@ -139,8 +140,46 @@ where
             );
             continue;
         }
+        if !cue_sheet.tracks.is_empty() {
+            append_log_line(
+                &mut log,
+                format!(
+                    "Split status: already rejected; keeping {} recorded track(s)",
+                    cue_sheet.tracks.len()
+                ),
+            );
+            rejected_splits.push(format!(
+                "{}: {}",
+                cue_path.display(),
+                cue_sheet.message.as_deref().unwrap_or("split rejected")
+            ));
+            continue;
+        }
 
         match splitter.split_cue(&cue_path).await {
+            Ok(result) if result.status == SplitStatus::Failed => {
+                let message = result
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "split rejected".into());
+                eprintln!(
+                    "Failed splitting cue for {} at {}: {message}",
+                    download.title,
+                    cue_path.display()
+                );
+                append_log_line(&mut log, format!("Split failed: {message}"));
+                for track in &result.tracks {
+                    append_log_line(&mut log, format!("  written: {}", track.display()));
+                }
+                let entry = format!("{}: {message}", cue_path.display());
+                if result.tracks.is_empty() {
+                    all_cues_complete = false;
+                    failures.push(entry);
+                } else {
+                    rejected_splits.push(entry);
+                }
+                store_split_result(store, inspector, &cue_sheet, result).await?;
+            }
             Ok(result) => {
                 let tracks = result.tracks.clone();
                 append_log_line(
@@ -188,6 +227,13 @@ where
             .await?;
         append_log_line(&mut log, "");
         append_log_line(&mut log, "Final processing state: awaiting_import");
+        if !rejected_splits.is_empty() {
+            let message = rejected_splits.join("; ");
+            append_log_line(&mut log, format!("Rejected splits: {message}"));
+            store
+                .record_download_warning(&download.download_id, &message)
+                .await?;
+        }
         append_log_line(
             &mut log,
             format!("Generated tracks total: {}", generated_tracks.len()),
@@ -331,6 +377,7 @@ async fn store_split_result<S: DownloadStore, I: CueInputInspector>(
     let status = match result.status {
         SplitStatus::Split => CueSheetStatus::Split,
         SplitStatus::Skipped => CueSheetStatus::Skipped,
+        SplitStatus::Failed => CueSheetStatus::Failed,
     };
     let mut tracks = Vec::with_capacity(result.tracks.len());
     for path in &result.tracks {
@@ -530,12 +577,10 @@ mod tests {
             message: Option<&str>,
             tracks: &[RecordedTrack],
         ) -> Result<()> {
-            if status == CueSheetStatus::Split {
-                self.recorded_tracks
-                    .lock()
-                    .unwrap()
-                    .extend(tracks.iter().map(|track| track.path.clone()));
-            }
+            self.recorded_tracks
+                .lock()
+                .unwrap()
+                .extend(tracks.iter().map(|track| track.path.clone()));
             if status == CueSheetStatus::Failed {
                 *self.last_error.lock().unwrap() = message.map(str::to_owned);
             }
@@ -628,6 +673,22 @@ mod tests {
                 status: SplitStatus::Split,
                 tracks: vec![cue_path.with_file_name("01 - Track.flac")],
                 message: None,
+            })
+        }
+    }
+
+    struct RejectingSplitter {
+        calls: Mutex<Vec<PathBuf>>,
+        written: Vec<PathBuf>,
+    }
+
+    impl CueSplitter for RejectingSplitter {
+        async fn split_cue(&self, cue_path: &Path) -> Result<SplitOutcome> {
+            self.calls.lock().unwrap().push(cue_path.to_path_buf());
+            Ok(SplitOutcome {
+                status: SplitStatus::Failed,
+                tracks: self.written.clone(),
+                message: Some("shnsplit generated 2 track(s) but cue contains 1 track(s)".into()),
             })
         }
     }
@@ -984,6 +1045,154 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].generated_tracks, vec![recorded_track]);
         assert_eq!(calls[0].cue_hints[0].track_count, 1);
+    }
+
+    fn single_track_album(dir: &Path) -> PathBuf {
+        let cue_path = dir.join("album.cue");
+        fs::write(dir.join("album.flac"), b"audio").unwrap();
+        fs::write(
+            &cue_path,
+            "FILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:32\n",
+        )
+        .unwrap();
+        cue_path
+    }
+
+    async fn process_with_splitter<P: CueSplitter>(
+        store: &FakeStore,
+        splitter: &P,
+        manual_import: &FakeManualImport,
+        dir: &Path,
+        cue_path: PathBuf,
+    ) {
+        let scanner = FakeScanner {
+            roots: Mutex::new(Vec::new()),
+            cue_files: vec![cue_path],
+        };
+        let inspector = FakeInspector {
+            matches: Mutex::new(Vec::new()),
+        };
+        let download = TrackedDownload::pending(
+            "download-1".into(),
+            "Album".into(),
+            "completed".into(),
+            dir.to_string_lossy().to_string(),
+            "importFailed".into(),
+        );
+        process_tracked_download(
+            store,
+            &scanner,
+            &inspector,
+            splitter,
+            manual_import,
+            &FakeDownloadLog::default(),
+            download,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejected_split_records_its_written_tracks_and_awaits_manual_import() {
+        let tmp = tempdir().unwrap();
+        let cue_path = single_track_album(tmp.path());
+        let written = vec![
+            tmp.path().join("00 - pregap.flac"),
+            tmp.path().join("01 - Track.flac"),
+        ];
+        for track in &written {
+            fs::write(track, b"track").unwrap();
+        }
+        let store = FakeStore::default();
+        let splitter = RejectingSplitter {
+            calls: Mutex::new(Vec::new()),
+            written: written.clone(),
+        };
+        let manual_import = FakeManualImport::default();
+
+        process_with_splitter(&store, &splitter, &manual_import, tmp.path(), cue_path).await;
+
+        let recorded = store.recorded_tracks.lock().unwrap().clone();
+        assert_eq!(
+            recorded,
+            written
+                .iter()
+                .map(|track| track.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            store.states.lock().unwrap().last().map(String::as_str),
+            Some("awaiting_import")
+        );
+        assert!(store.warnings.lock().unwrap()[0].contains("cue contains 1 track(s)"));
+        assert!(manual_import.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cue_with_a_rejected_split_on_disk_is_not_split_again() {
+        let tmp = tempdir().unwrap();
+        let cue_path = single_track_album(tmp.path());
+        let written = tmp.path().join("00 - pregap.flac");
+        let store = FakeStore::default();
+        store.cue_sheets.lock().unwrap().push(CueSheet {
+            id: "cue-1".into(),
+            download_id: "download-1".into(),
+            path: cue_path.to_string_lossy().to_string(),
+            status: CueSheetStatus::Failed,
+            message: Some("shnsplit generated 2 track(s) but cue contains 1 track(s)".into()),
+            updated_at: "now".into(),
+            tracks: vec![GeneratedTrack {
+                id: "track-1".into(),
+                cue_sheet_id: "cue-1".into(),
+                download_id: "download-1".into(),
+                path: written.to_string_lossy().to_string(),
+                size_bytes: Some(5),
+                cleanup_status: TrackCleanupStatus::Pending,
+                cleanup_message: None,
+                deleted_at: None,
+            }],
+        });
+        let splitter = FakeSplitter {
+            calls: Mutex::new(Vec::new()),
+        };
+        let manual_import = FakeManualImport::default();
+
+        process_with_splitter(&store, &splitter, &manual_import, tmp.path(), cue_path).await;
+
+        assert!(splitter.calls.lock().unwrap().is_empty());
+        assert!(manual_import.calls.lock().unwrap().is_empty());
+        assert_eq!(
+            store.states.lock().unwrap().last().map(String::as_str),
+            Some("awaiting_import")
+        );
+        assert!(store.warnings.lock().unwrap()[0].contains("cue contains 1 track(s)"));
+    }
+
+    #[tokio::test]
+    async fn rejected_split_that_wrote_nothing_is_retried() {
+        let tmp = tempdir().unwrap();
+        let cue_path = single_track_album(tmp.path());
+        let store = FakeStore::default();
+        let splitter = RejectingSplitter {
+            calls: Mutex::new(Vec::new()),
+            written: Vec::new(),
+        };
+        let manual_import = FakeManualImport::default();
+
+        process_with_splitter(&store, &splitter, &manual_import, tmp.path(), cue_path).await;
+
+        assert_eq!(
+            store.states.lock().unwrap().last().map(String::as_str),
+            Some("failed")
+        );
+        assert!(store
+            .last_error
+            .lock()
+            .unwrap()
+            .as_deref()
+            .unwrap()
+            .contains("cue contains 1 track(s)"));
+        assert!(store.warnings.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
