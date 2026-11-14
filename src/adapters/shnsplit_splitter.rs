@@ -83,7 +83,14 @@ impl ShnsplitCueSplitter {
         }
 
         let overwrite = if self.overwrite { "always" } else { "never" };
-        let files_before = snapshot_audio_files_best_effort(cue_dir, cue_path);
+        let files_before = snapshot_audio_files(cue_dir)
+            .inspect_err(|err| {
+                eprintln!(
+                    "Unable to snapshot audio files for {}: {err}",
+                    cue_path.display()
+                )
+            })
+            .ok();
         let output = {
             let mut command = Command::new(&self.shnsplit_path);
             command
@@ -109,37 +116,53 @@ impl ShnsplitCueSplitter {
             })?
         };
 
+        let parsed_tracks = parse_generated_tracks(cue_dir, &output.stderr);
+        let files_after = snapshot_audio_files_best_effort(cue_dir, cue_path);
+        let no_files = BTreeSet::new();
+        let detected_tracks = detect_generated_tracks(
+            &referenced_paths,
+            files_before.as_ref().unwrap_or(&no_files),
+            &files_after,
+        );
+        let rejected = |message: String| SplitOutcome {
+            status: SplitStatus::Failed,
+            tracks: if files_before.is_some() {
+                existing_unique_tracks(detected_tracks.clone())
+            } else {
+                Vec::new()
+            },
+            message: Some(message),
+        };
+
         if !output.status.success() {
             let status = output.status.code().map_or_else(
                 || "terminated by signal".to_owned(),
                 |code| code.to_string(),
             );
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!(
+            return Ok(rejected(format!(
                 "shnsplit failed for {} with status {status}: {stderr}",
                 cue_path.display()
-            ));
+            )));
         }
 
-        let parsed_tracks = parse_generated_tracks(cue_dir, &output.stderr);
-        let files_after = snapshot_audio_files_best_effort(cue_dir, cue_path);
-        let detected_tracks =
-            detect_generated_tracks(&referenced_paths, &files_before, &files_after);
         let tracks = select_generated_tracks(
             cue_path,
             expected_tracks,
             &referenced_paths,
             parsed_tracks,
-            detected_tracks,
+            detected_tracks.clone(),
             &files_after,
-        )?;
-        let tracks = normalize_generated_track_filenames(tracks)?;
-
-        Ok(SplitOutcome {
-            status: SplitStatus::Split,
-            tracks,
-            message: None,
-        })
+        )
+        .and_then(normalize_generated_track_filenames);
+        match tracks {
+            Ok(tracks) => Ok(SplitOutcome {
+                status: SplitStatus::Split,
+                tracks,
+                message: None,
+            }),
+            Err(err) => Ok(rejected(err.to_string())),
+        }
     }
 }
 
@@ -554,20 +577,37 @@ exit 0
     }
 
     #[test]
-    fn command_failure_is_an_error() {
+    fn command_failure_rejects_the_split_with_the_files_it_wrote() {
         let tmp = tempdir().unwrap();
         let cue_path = write_fixture_album(tmp.path(), true);
         let fake = write_fake_shnsplit(
             tmp.path(),
-            r#"echo "split failed" >&2
+            r#": > "Artist - Album - 01 - Track One.flac"
+echo "split failed" >&2
 exit 2
 "#,
         );
         let splitter = test_splitter(fake);
 
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
+
+        assert_eq!(result.status, SplitStatus::Failed);
+        assert!(result.message.unwrap().contains("shnsplit failed"));
+        assert_eq!(
+            result.tracks,
+            vec![tmp.path().join("Artist - Album - 01 - Track One.flac")]
+        );
+    }
+
+    #[test]
+    fn command_that_cannot_start_is_an_error() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_fixture_album(tmp.path(), true);
+        let splitter = test_splitter(tmp.path().join("missing-shnsplit"));
+
         let err = splitter.split_cue_sync(&cue_path).unwrap_err();
 
-        assert!(err.to_string().contains("shnsplit failed"));
+        assert!(err.to_string().contains("failed to run shnsplit"));
     }
 
     #[test]
@@ -616,9 +656,10 @@ exit 2
         );
         let splitter = test_splitter(fake);
 
-        let err = splitter.split_cue_sync(&cue_path).unwrap_err();
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
 
-        assert!(err.to_string().contains("shnsplit failed"));
+        assert_eq!(result.status, SplitStatus::Failed);
+        assert!(result.message.unwrap().contains("shnsplit failed"));
         let temporary_cue = fs::read_to_string(tmp.path().join("cue-argument.log")).unwrap();
         assert!(!Path::new(&temporary_cue).exists());
         assert_eq!(fs::read(&cue_path).unwrap(), WINDOWS_1251_CUE);
@@ -892,10 +933,87 @@ exit 0
         );
         let splitter = test_splitter(fake);
 
-        let err = splitter.split_cue_sync(&cue_path).unwrap_err();
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
 
-        assert!(err.to_string().contains("shnsplit generated 1 track(s)"));
-        assert!(err.to_string().contains("cue contains 2 track(s)"));
+        assert_eq!(result.status, SplitStatus::Failed);
+        let message = result.message.unwrap();
+        assert!(message.contains("shnsplit generated 1 track(s)"));
+        assert!(message.contains("cue contains 2 track(s)"));
+        assert_eq!(
+            result.tracks,
+            vec![tmp.path().join("Artist - Album - 01 - Track One.flac")]
+        );
+    }
+
+    #[test]
+    fn rejected_split_never_claims_a_reported_file_it_did_not_write() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_fixture_album(tmp.path(), true);
+        let existing = tmp.path().join("Artist - Album - 01 - Track One.flac");
+        fs::write(&existing, b"already here").unwrap();
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            r#"echo "Splitting [album.flac] (0:01.00) --> [Artist - Album - 01 - Track One.flac] (0:01.00) :" >&2
+echo "refusing to overwrite" >&2
+exit 2
+"#,
+        );
+        let splitter = test_splitter(fake);
+
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
+
+        assert_eq!(result.status, SplitStatus::Failed);
+        assert!(result.tracks.is_empty());
+        assert_eq!(fs::read(&existing).unwrap(), b"already here");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejected_split_claims_nothing_without_a_snapshot_from_before_it() {
+        let tmp = tempdir().unwrap();
+        let album_dir = tmp.path().join("album");
+        fs::create_dir(&album_dir).unwrap();
+        let cue_path = write_fixture_album(&album_dir, true);
+        fs::write(album_dir.join("bonus.flac"), b"torrent audio").unwrap();
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            r#"chmod 755 .
+: > "Artist - Album - 01 - Track One.flac"
+exit 2
+"#,
+        );
+        fs::set_permissions(&album_dir, fs::Permissions::from_mode(0o300)).unwrap();
+        let splitter = test_splitter(fake);
+
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
+
+        fs::set_permissions(&album_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(result.status, SplitStatus::Failed);
+        assert!(result.tracks.is_empty());
+    }
+
+    #[test]
+    fn rejected_split_never_claims_audio_that_was_already_there() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_two_track_fixture_album(tmp.path());
+        fs::write(tmp.path().join("bonus.flac"), b"torrent audio").unwrap();
+        fs::write(tmp.path().join("extra.flac"), b"torrent audio").unwrap();
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            r#": > "Artist - Album - 01 - Track One.flac"
+echo "split complete" >&2
+exit 0
+"#,
+        );
+        let splitter = test_splitter(fake);
+
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
+
+        assert_eq!(result.status, SplitStatus::Failed);
+        assert_eq!(
+            result.tracks,
+            vec![tmp.path().join("Artist - Album - 01 - Track One.flac")]
+        );
     }
 
     #[test]

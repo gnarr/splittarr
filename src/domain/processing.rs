@@ -29,4 +29,5 @@ pub struct SplitOutcome {
 pub enum SplitStatus {
     Split,
     Skipped,
+    Failed,
 }

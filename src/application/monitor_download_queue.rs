@@ -12,7 +12,7 @@ pub fn classify_downloads(
             if download.lifecycle_state.is_ready_for_processing() {
                 to_process.push(download);
             }
-        } else if !download.lifecycle_state.is_terminal() && download.has_generated_tracks() {
+        } else if !download.lifecycle_state.is_terminal() {
             to_cleanup.push(download);
         }
     }
@@ -61,6 +61,32 @@ mod tests {
                 .map(|download| download.download_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["gone"]
+        );
+    }
+
+    #[test]
+    fn cleans_up_downloads_without_tracks_once_they_leave_the_queue() {
+        let snapshot = QueueSnapshot {
+            total_records: 0,
+            pages_fetched: 1,
+            active_download_ids: HashSet::new(),
+            failed_imports: Vec::new(),
+        };
+        let mut no_cue = with_state("no-cue", DownloadLifecycleState::Failed);
+        no_cue.cue_sheets.clear();
+        let mut skipped = with_state("skipped", DownloadLifecycleState::AwaitingImport);
+        skipped.cue_sheets[0].status = crate::domain::CueSheetStatus::Skipped;
+        skipped.cue_sheets[0].tracks.clear();
+
+        let (to_process, to_cleanup) = classify_downloads(vec![no_cue, skipped], &snapshot);
+
+        assert!(to_process.is_empty());
+        assert_eq!(
+            to_cleanup
+                .iter()
+                .map(|download| download.download_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["no-cue", "skipped"]
         );
     }
 
