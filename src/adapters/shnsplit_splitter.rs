@@ -1092,27 +1092,26 @@ exit 2
         assert_eq!(fs::read(&existing).unwrap(), b"already here");
     }
 
-    #[cfg(unix)]
     #[test]
     fn rejected_split_claims_nothing_without_a_snapshot_from_before_it() {
         let tmp = tempdir().unwrap();
-        let album_dir = tmp.path().join("album");
-        fs::create_dir(&album_dir).unwrap();
-        let cue_path = write_fixture_album(&album_dir, true);
-        fs::write(album_dir.join("bonus.flac"), b"torrent audio").unwrap();
-        let fake = write_fake_shnsplit(
+        let cue_path = write_fixture_album(tmp.path(), true);
+        let input = tmp.path().join("album.flac");
+        fs::write(tmp.path().join("bonus.flac"), b"torrent audio").unwrap();
+        fs::write(
+            tmp.path().join("Artist - Album - 01 - Track One.flac"),
+            b"track",
+        )
+        .unwrap();
+
+        let result = rejected_outcome(
             tmp.path(),
-            r#"chmod 755 .
-: > "Artist - Album - 01 - Track One.flac"
-exit 2
-"#,
+            &cue_path,
+            &[input],
+            None,
+            "shnsplit failed".into(),
         );
-        fs::set_permissions(&album_dir, fs::Permissions::from_mode(0o300)).unwrap();
-        let splitter = test_splitter(fake);
 
-        let result = splitter.split_cue_sync(&cue_path).unwrap();
-
-        fs::set_permissions(&album_dir, fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(result.status, SplitStatus::Failed);
         assert!(result.tracks.is_empty());
     }
