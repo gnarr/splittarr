@@ -157,48 +157,50 @@ where
         }
 
         match splitter.split_cue(&cue_path).await {
-            Ok(result) if result.status == SplitStatus::Failed => {
-                let message = result
-                    .message
-                    .clone()
-                    .unwrap_or_else(|| "split rejected".into());
-                eprintln!(
-                    "Failed splitting cue for {} at {}: {message}",
-                    download.title,
-                    cue_path.display()
-                );
-                append_log_line(&mut log, format!("Split failed: {message}"));
-                for track in &result.tracks {
-                    append_log_line(&mut log, format!("  written: {}", track.display()));
+            Ok(result) => match result.status {
+                SplitStatus::Failed => {
+                    let message = result
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| "split rejected".into());
+                    eprintln!(
+                        "Failed splitting cue for {} at {}: {message}",
+                        download.title,
+                        cue_path.display()
+                    );
+                    append_log_line(&mut log, format!("Split failed: {message}"));
+                    for track in &result.tracks {
+                        append_log_line(&mut log, format!("  written: {}", track.display()));
+                    }
+                    let entry = format!("{}: {message}", cue_path.display());
+                    if result.tracks.is_empty() {
+                        all_cues_complete = false;
+                        failures.push(entry);
+                    } else {
+                        rejected_splits.push(entry);
+                    }
+                    store_split_result(store, inspector, &cue_sheet, result).await?;
                 }
-                let entry = format!("{}: {message}", cue_path.display());
-                if result.tracks.is_empty() {
-                    all_cues_complete = false;
-                    failures.push(entry);
-                } else {
-                    rejected_splits.push(entry);
+                SplitStatus::Split | SplitStatus::Skipped => {
+                    let tracks = result.tracks.clone();
+                    append_log_line(
+                        &mut log,
+                        format!(
+                            "Split status: {:?}; generated {} track(s)",
+                            result.status,
+                            result.tracks.len()
+                        ),
+                    );
+                    if let Some(message) = &result.message {
+                        append_log_line(&mut log, format!("Split message: {message}"));
+                    }
+                    for track in &tracks {
+                        append_log_line(&mut log, format!("  generated: {}", track.display()));
+                    }
+                    store_split_result(store, inspector, &cue_sheet, result).await?;
+                    generated_tracks.extend(tracks);
                 }
-                store_split_result(store, inspector, &cue_sheet, result).await?;
-            }
-            Ok(result) => {
-                let tracks = result.tracks.clone();
-                append_log_line(
-                    &mut log,
-                    format!(
-                        "Split status: {:?}; generated {} track(s)",
-                        result.status,
-                        result.tracks.len()
-                    ),
-                );
-                if let Some(message) = &result.message {
-                    append_log_line(&mut log, format!("Split message: {message}"));
-                }
-                for track in &tracks {
-                    append_log_line(&mut log, format!("  generated: {}", track.display()));
-                }
-                store_split_result(store, inspector, &cue_sheet, result).await?;
-                generated_tracks.extend(tracks);
-            }
+            },
             Err(err) => {
                 all_cues_complete = false;
                 let message = err.to_string();
