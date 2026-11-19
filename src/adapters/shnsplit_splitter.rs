@@ -124,14 +124,14 @@ impl ShnsplitCueSplitter {
             files_before.as_ref().unwrap_or(&no_files),
             &files_after,
         );
-        let rejected = |message: String| SplitOutcome {
-            status: SplitStatus::Failed,
-            tracks: if files_before.is_some() {
-                existing_unique_tracks(detected_tracks.clone())
-            } else {
-                Vec::new()
-            },
-            message: Some(message),
+        let rejected = |message: String| {
+            rejected_outcome(
+                cue_dir,
+                cue_path,
+                &referenced_paths,
+                files_before.as_ref(),
+                message,
+            )
         };
 
         if !output.status.success() {
@@ -151,7 +151,7 @@ impl ShnsplitCueSplitter {
             expected_tracks,
             &referenced_paths,
             parsed_tracks,
-            detected_tracks.clone(),
+            detected_tracks,
             &files_after,
         )
         .and_then(normalize_generated_track_filenames);
@@ -163,6 +163,48 @@ impl ShnsplitCueSplitter {
             }),
             Err(err) => Ok(rejected(err.to_string())),
         }
+    }
+}
+
+fn rejected_outcome(
+    cue_dir: &Path,
+    cue_path: &Path,
+    referenced_paths: &[PathBuf],
+    files_before: Option<&BTreeSet<FileSnapshot>>,
+    message: String,
+) -> SplitOutcome {
+    let Some(files_before) = files_before else {
+        return SplitOutcome {
+            status: SplitStatus::Failed,
+            tracks: Vec::new(),
+            message: Some(message),
+        };
+    };
+
+    let files_now = snapshot_audio_files_best_effort(cue_dir, cue_path);
+    let written = detect_generated_tracks(referenced_paths, files_before, &files_now);
+    let (tracks, unnamed): (Vec<PathBuf>, Vec<PathBuf>) =
+        normalize_rejected_track_filenames(written)
+            .into_iter()
+            .partition(|track| track.to_str().is_some());
+    let message = if unnamed.is_empty() {
+        message
+    } else {
+        let names = unnamed
+            .iter()
+            .map(|track| track.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "{message}; left {} file(s) whose names cannot be recorded: {names}",
+            unnamed.len()
+        )
+    };
+
+    SplitOutcome {
+        status: SplitStatus::Failed,
+        tracks,
+        message: Some(message),
     }
 }
 
@@ -274,6 +316,31 @@ fn normalize_generated_track_filenames(tracks: Vec<PathBuf>) -> Result<Vec<PathB
         }
     }
     Ok(plan.into_iter().map(|rename| rename.target).collect())
+}
+
+fn normalize_rejected_track_filenames(tracks: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut normalized = Vec::with_capacity(tracks.len());
+    for track in tracks {
+        let target = match sanitized_generated_track_path(&track) {
+            Ok(target) if target != track && !target.exists() => target,
+            _ => {
+                normalized.push(track);
+                continue;
+            }
+        };
+        match fs::rename(&track, &target) {
+            Ok(()) => normalized.push(target),
+            Err(err) => {
+                eprintln!(
+                    "Unable to rename rejected track {} to {}: {err}",
+                    track.display(),
+                    target.display()
+                );
+                normalized.push(track);
+            }
+        }
+    }
+    normalized
 }
 
 fn build_generated_track_rename_plan(tracks: Vec<PathBuf>) -> Result<Vec<GeneratedTrackRename>> {
@@ -534,8 +601,8 @@ mod tests {
 
     use super::{
         decoder_args, detect_generated_tracks, normalize_generated_track_filenames,
-        parse_generated_tracks, sanitize_file_name_str, snapshot_audio_files_best_effort,
-        ShnsplitCueSplitter,
+        parse_generated_tracks, rejected_outcome, sanitize_file_name_str,
+        snapshot_audio_files_best_effort, ShnsplitCueSplitter,
     };
     use crate::cue_file::CueReader;
     use crate::domain::SplitStatus;
@@ -868,12 +935,70 @@ exit 0
 "#,
         );
         let splitter = test_splitter(fake);
+        let existing = tmp.path().join("Artist - Album - 01 - You're Lost.flac");
+        let raw_path = tmp.path().join(PathBuf::from(OsString::from_vec(
+            b"Artist - Album - 01 - You\x92re Lost.flac".to_vec(),
+        )));
 
-        let err = splitter.split_cue_sync(&cue_path).unwrap_err();
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
 
-        assert!(err
-            .to_string()
-            .contains("sanitized generated track path already exists"));
+        assert_eq!(result.status, SplitStatus::Failed);
+        assert!(result.tracks.is_empty());
+        let message = result.message.unwrap();
+        assert!(message.contains("sanitized generated track path already exists"));
+        assert!(message.contains("left 1 file(s) whose names cannot be recorded"));
+        assert_eq!(fs::read(&existing).unwrap(), b"existing");
+        assert!(raw_path.exists());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn rejected_split_records_a_non_utf8_output_under_its_sanitized_name() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_two_track_fixture_album(tmp.path());
+        let fake = write_fake_shnsplit(
+            tmp.path(),
+            r#"name=$(printf 'Artist - Album - 01 - You\222re Lost.flac')
+printf 'track' > "$name"
+printf 'Splitting [album.flac] (0:01.00) --> [%s] (0:01.00) :\n' "$name" >&2
+exit 0
+"#,
+        );
+        let splitter = test_splitter(fake);
+        let raw_path = tmp.path().join(PathBuf::from(OsString::from_vec(
+            b"Artist - Album - 01 - You\x92re Lost.flac".to_vec(),
+        )));
+
+        let result = splitter.split_cue_sync(&cue_path).unwrap();
+
+        assert_eq!(result.status, SplitStatus::Failed);
+        assert!(result.message.unwrap().contains("cue contains 2 track(s)"));
+        assert_eq!(
+            result.tracks,
+            vec![tmp.path().join("Artist - Album - 01 - You're Lost.flac")]
+        );
+        assert!(!raw_path.exists());
+    }
+
+    #[test]
+    fn rejected_record_includes_files_renamed_before_the_failure() {
+        let tmp = tempdir().unwrap();
+        let cue_path = write_fixture_album(tmp.path(), true);
+        let input = tmp.path().join("album.flac");
+        let before = super::snapshot_audio_files(tmp.path()).unwrap();
+        let renamed = tmp.path().join("Artist - Album - 01 - Track One.flac");
+        fs::write(&renamed, b"track").unwrap();
+
+        let result = rejected_outcome(
+            tmp.path(),
+            &cue_path,
+            &[input],
+            Some(&before),
+            "failed to rename generated track".into(),
+        );
+
+        assert_eq!(result.status, SplitStatus::Failed);
+        assert_eq!(result.tracks, vec![renamed]);
     }
 
     #[test]
