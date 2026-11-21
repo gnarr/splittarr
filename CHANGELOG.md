@@ -1,6 +1,20 @@
 # Changelog
 
 - - -
+## [v0.6.1](https://github.com/gnarr/splittarr/compare/c744cb37f911fde8fa39c21d2c3f12307590c16c..v0.6.1) - 2026-11-21
+#### Bug Fixes
+- (**ci**) run release on pull_request_target so fork merges get a write token - ([ac8fcea](https://github.com/gnarr/splittarr/commit/ac8fcea48b5f3dcda4b8550d4431c38d86d7b12c)) - Gunnar Cortes
+- record a rejected split from the disk after it fails - ([5e7ec28](https://github.com/gnarr/splittarr/commit/5e7ec289ed0ab0bdb5408cb49f073de9c700dc26)) - Aleksandr Kuznetsov
+- clean up files a rejected split wrote - ([eed8660](https://github.com/gnarr/splittarr/commit/eed8660e0e2afab8af5c30281c57db0a113f0ca5)) - Aleksandr Kuznetsov
+#### Tests
+- fail the before-snapshot without relying on directory permissions - ([1b36155](https://github.com/gnarr/splittarr/commit/1b3615515e7f449d6a5b2ffd10ad0a695eb51628)) - Aleksandr Kuznetsov
+#### Continuous Integration
+- (**release**) drop the GitHub Actions build cache - ([c744cb3](https://github.com/gnarr/splittarr/commit/c744cb37f911fde8fa39c21d2c3f12307590c16c)) - Gunnar Cortes
+#### Refactoring
+- match every split status when handling a split result - ([b1bd233](https://github.com/gnarr/splittarr/commit/b1bd233cb62c93999b3639c4d44df02caad6c135)) - Aleksandr Kuznetsov
+
+- - -
+
 ## [v0.6.0](https://github.com/gnarr/splittarr/compare/ae035c18824486c8bd32cb0e7247ace319727eec..v0.6.0) - 2026-10-22
 #### Features
 - (**cue**) support legacy-encoded external CUE sheets - ([ae035c1](https://github.com/gnarr/splittarr/commit/ae035c18824486c8bd32cb0e7247ace319727eec)) - Ivan Malaniak
